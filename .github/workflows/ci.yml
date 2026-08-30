@@ -39,7 +39,7 @@ jobs:
           workspaces: apps/desktop/src-tauri
       - name: cargo check
         working-directory: apps/desktop/src-tauri
-        run: cargo check --locked 2>/dev/null || cargo check
+        run: cargo check
       - name: cargo clippy
         working-directory: apps/desktop/src-tauri
         run: cargo clippy -- -D warnings
