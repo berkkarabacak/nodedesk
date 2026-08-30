@@ -361,7 +361,7 @@ fn local_metrics() -> monitor::Metrics {
 }
 
 #[tauri::command]
-async fn run_diagnostics(state: State<'_, AppState>) -> Vec<DiagnosticsItem> {
+async fn run_diagnostics(state: State<'_, AppState>) -> Result<Vec<DiagnosticsItem>, String> {
     let sunshine_installed = sunshine::is_installed();
     let sunshine_running = sunshine::service_running();
     let api_ok = sunshine::api_reachable(&state.http_local).await;
@@ -373,7 +373,7 @@ async fn run_diagnostics(state: State<'_, AppState>) -> Vec<DiagnosticsItem> {
         .unwrap_or(false);
     let moonlight_ok = moonlight::moonlight_exe(&state.config_dir).is_some();
 
-    vec![
+    Ok(vec![
         DiagnosticsItem {
             label: "Host service".into(),
             ok: sunshine_installed && sunshine_running,
@@ -413,13 +413,13 @@ async fn run_diagnostics(state: State<'_, AppState>) -> Vec<DiagnosticsItem> {
             ok: tailscale_installed,
             detail: Some(if tailscale_installed { "Installed".into() } else { "Not installed (optional)".into() }),
         },
-    ]
+    ])
 }
 
 #[tauri::command]
 async fn export_diagnostics(state: State<'_, AppState>) -> Result<String, String> {
     // Never includes credentials, keys, tokens or clipboard contents.
-    let items = run_diagnostics(state.clone()).await;
+    let items = run_diagnostics(state.clone()).await?;
     let metrics = monitor::collect();
     let mut text = String::from("NodeDesk diagnostic report\n");
     text.push_str(&format!("version: {}\n\n", env!("CARGO_PKG_VERSION")));

@@ -1,8 +1,8 @@
 //! Local system metrics: CPU / RAM / GPU / VRAM / uptime / addresses.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct GpuMetrics {
     pub name: String,
@@ -11,7 +11,7 @@ pub struct GpuMetrics {
     pub vram_total_mb: u64,
 }
 
-#[derive(Serialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct Metrics {
     pub host_name: String,

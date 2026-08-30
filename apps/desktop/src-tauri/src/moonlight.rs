@@ -199,18 +199,23 @@ pub fn stream_args(settings: &Settings, host: &str) -> Vec<String> {
         _ => {}
     }
     if settings.fps > 0 {
-        args += ["-fps".into(), settings.fps.to_string()];
+        args.push("-fps".into());
+        args.push(settings.fps.to_string());
     }
     if settings.bitrate_mbps > 0 {
-        args += ["-bitrate".into(), (settings.bitrate_mbps * 1000).to_string()];
+        args.push("-bitrate".into());
+        args.push((settings.bitrate_mbps * 1000).to_string());
     }
     if settings.codec != "auto" {
-        args += ["-codec".into(), settings.codec.clone()];
+        args.push("-codec".into());
+        args.push(settings.codec.clone());
     }
     if settings.hdr {
         args.push("-hdr".into());
     }
-    args += ["stream".into(), host.to_string(), "Desktop".into()];
+    args.push("stream".into());
+    args.push(host.to_string());
+    args.push("Desktop".into());
     args
 }
 
