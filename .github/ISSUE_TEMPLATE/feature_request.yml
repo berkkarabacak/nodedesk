@@ -1,0 +1,27 @@
+name: Feature request
+description: Suggest an idea for NodeDesk
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: Describe the situation, not just the solution. Who needs this?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Keep the UX principle in mind — does the user actually need to know this?
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: checkboxes
+    id: upstream
+    attributes:
+      label: Upstream relevance
+      options:
+        - label: This might belong in upstream Sunshine/Moonlight instead
+        - label: I checked the roadmap and this isn't already planned

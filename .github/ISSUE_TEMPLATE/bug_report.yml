@@ -1,0 +1,45 @@
+name: Bug report
+description: Something isn't working
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! If possible, attach a diagnostic export
+        (**Help → Diagnostics → Export Diagnostic Report**). It never contains
+        passwords, keys, tokens or clipboard contents.
+  - type: input
+    id: version
+    attributes:
+      label: NodeDesk version
+      placeholder: e.g. 0.1.0
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - Windows
+        - Linux
+        - macOS
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: hardware
+    attributes:
+      label: Hardware (host and client)
+      placeholder: e.g. Host — RTX 4070, Windows 11 23H2; Client — Intel i7 laptop
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostic report
+      description: Paste the exported diagnostic report (redacted automatically)
+      render: text
