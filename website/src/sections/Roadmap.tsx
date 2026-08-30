@@ -22,14 +22,14 @@ export default function Roadmap() {
       <div className="mx-auto max-w-6xl px-4 sm:px-6">
         <div className="max-w-2xl">
           <p className="text-sm font-semibold uppercase tracking-widest text-emerald-400">Roadmap</p>
-          <h2 className="mt-3 text-3xl font-bold tracking-tight sm:text-4xl">Ship a great MVP. Then go deep.</h2>
+          <h2 className="mt-3 text-3xl font-bold tracking-tight sm:text-4xl">v1.0 is out. Now we go deep.</h2>
         </div>
 
         <div className="mt-12 grid gap-6 lg:grid-cols-2">
           <div className="rounded-2xl border border-emerald-500/25 bg-emerald-500/5 p-7">
             <div className="flex items-center gap-3">
-              <span className="rounded-md bg-emerald-500/15 px-2.5 py-1 text-xs font-semibold text-emerald-300">MVP 0.1</span>
-              <h3 className="font-semibold">The first release</h3>
+              <span className="rounded-md bg-emerald-500/15 px-2.5 py-1 text-xs font-semibold text-emerald-300">v1.0</span>
+              <h3 className="font-semibold">Shipping now</h3>
             </div>
             <ul className="mt-5 space-y-2.5">
               {mvp.map((text) => (
@@ -43,8 +43,8 @@ export default function Roadmap() {
 
           <div className="rounded-2xl border border-zinc-800 bg-zinc-900/40 p-7">
             <div className="flex items-center gap-3">
-              <span className="rounded-md bg-zinc-800 px-2.5 py-1 text-xs font-semibold text-zinc-300">0.2 → 1.0</span>
-              <h3 className="font-semibold">After MVP</h3>
+              <span className="rounded-md bg-zinc-800 px-2.5 py-1 text-xs font-semibold text-zinc-300">Next</span>
+              <h3 className="font-semibold">Coming next</h3>
             </div>
             <ul className="mt-5 space-y-2.5">
               {next.map((text) => (
