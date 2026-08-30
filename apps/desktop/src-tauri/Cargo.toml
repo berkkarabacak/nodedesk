@@ -6,10 +6,6 @@ authors = ["NodeDesk contributors"]
 edition = "2021"
 license = "GPL-3.0-only"
 
-[lib]
-name = "nodedesk_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
-
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
