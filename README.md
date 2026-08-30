@@ -129,10 +129,12 @@ LAN discovery · PIN pairing without the web UI · Tailscale detection ·
 computer dashboard with live CPU/RAM/GPU · clipboard sync ·
 wake/sleep/restart/shutdown/lock · diagnostics · update checks.
 
-**After v1.0:** drag & drop file transfer with resume · integrated remote
-terminal · AI service discovery · automatic headless virtual displays · Linux
-host · macOS controller · beta/nightly channels · hardware compatibility
-matrix.
+**v1.1 adds:** drag & drop file transfer with automatic resume · integrated
+remote terminal · AI service discovery (Ollama, Open WebUI, ComfyUI, Jupyter,
+vLLM, LM Studio, SD WebUI) · Linux/macOS power actions in the agent.
+
+**Next:** Linux host & macOS controller packaging · automatic headless virtual
+displays · beta/nightly channels · hardware compatibility matrix.
 
 The defining test of NodeDesk:
 
