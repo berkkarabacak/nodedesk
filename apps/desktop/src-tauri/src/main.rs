@@ -95,12 +95,14 @@ fn list_computers() -> Vec<Computer> {
 /// per-device certificate pair; reconnect logic per docs/networking.md.
 #[tauri::command]
 fn connect_computer(id: String) -> OkResult {
+    let _ = &id; // wiring lands with streaming/moonlight
 
     OkResult { ok: true }
 }
 
 #[tauri::command]
 fn disconnect_computer(id: String) -> OkResult {
+    let _ = &id;
 
     OkResult { ok: true }
 }
@@ -108,6 +110,7 @@ fn disconnect_computer(id: String) -> OkResult {
 /// Sends a Wake-on-LAN magic packet to a known, previously paired host.
 #[tauri::command]
 fn wake_computer(id: String) -> OkResult {
+    let _ = &id;
 
     OkResult { ok: true }
 }
@@ -115,6 +118,7 @@ fn wake_computer(id: String) -> OkResult {
 /// Authenticated power action against a paired host agent.
 #[tauri::command]
 fn power_action(id: String, action: String) -> OkResult {
+    let _ = (&id, &action);
 
     OkResult { ok: true }
 }
