@@ -28,18 +28,21 @@ pub fn execute(cmd: &str, cwd: &str) -> TerminalResult {
     };
 
     #[cfg(windows)]
-    let (shell, args) = {
+    let (shell, args): (&str, Vec<String>) = {
         let escaped = start_dir.replace('\'', "''");
         let wrapped = format!(
             "Set-Location -Path '{escaped}'; {cmd}; Write-Output \"`n{CWD_MARKER}$((Get-Location).Path)\""
         );
-        ("powershell", vec!["-NoProfile", "-NonInteractive", "-Command", &wrapped])
+        (
+            "powershell",
+            vec!["-NoProfile".into(), "-NonInteractive".into(), "-Command".into(), wrapped],
+        )
     };
     #[cfg(not(windows))]
-    let (shell, args) = {
+    let (shell, args): (&str, Vec<String>) = {
         let escaped = start_dir.replace('\'', "'\\''");
         let wrapped = format!("cd '{escaped}'; {cmd}; printf '\\n{CWD_MARKER}%s' \"$PWD\"");
-        ("sh", vec!["-c", &wrapped])
+        ("sh", vec!["-c".into(), wrapped])
     };
 
     let spawn = std::process::Command::new(shell)

@@ -22,7 +22,7 @@ pub struct FileEntry {
     pub size: u64,
 }
 
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize)]
 pub struct StatResponse {
     pub size: u64,
     pub is_dir: bool,
