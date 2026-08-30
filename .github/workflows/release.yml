@@ -47,7 +47,6 @@ jobs:
       - name: Create prerelease with artifacts
         uses: softprops/action-gh-release@v2
         with:
-          prerelease: true
           files: artifacts/**/*.exe
           generate_release_notes: true
 

@@ -1,6 +1,6 @@
-import { useState } from 'react'
-import { ArrowLeft, ChevronDown, ChevronRight, ExternalLink } from 'lucide-react'
-import type { Settings } from '../lib/api'
+import { useEffect, useState } from 'react'
+import { ArrowLeft, ChevronDown, ChevronRight, Copy, RefreshCcw } from 'lucide-react'
+import { api, type Settings } from '../lib/api'
 
 function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) {
   return (
@@ -40,6 +40,24 @@ export default function SettingsScreen({
 }) {
   const [s, setS] = useState(settings)
   const [advanced, setAdvanced] = useState(false)
+  const [accessCode, setAccessCode] = useState('')
+  const [copied, setCopied] = useState(false)
+
+  const isHost = s.mode === 'host' || s.mode === 'both'
+
+  useEffect(() => {
+    if (isHost) void api.getAccessCode().then(setAccessCode)
+  }, [isHost])
+
+  const copyCode = () => {
+    void navigator.clipboard.writeText(accessCode)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
+  }
+
+  const regenerate = async () => {
+    setAccessCode(await api.regenerateAccessCode())
+  }
 
   return (
     <div className="mx-auto min-h-screen max-w-2xl px-5 py-6">
@@ -48,11 +66,32 @@ export default function SettingsScreen({
       </button>
       <h1 className="mt-4 text-xl font-bold">Settings</h1>
 
+      {isHost && (
+        <div className="mt-6 rounded-2xl border border-emerald-500/25 bg-emerald-500/5 p-5">
+          <p className="text-sm font-medium">Access code for this computer</p>
+          <p className="mt-1 text-xs text-zinc-500">
+            Your other devices need this code once to see live stats and send power actions here.
+          </p>
+          <div className="mt-3 flex items-center gap-2">
+            <span className="rounded-lg border border-zinc-700 bg-zinc-950 px-4 py-2 font-mono text-lg tracking-widest text-emerald-300">
+              {accessCode}
+            </span>
+            <button onClick={copyCode} title="Copy" className="rounded-lg border border-zinc-700 p-2.5 text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100">
+              <Copy className="h-4 w-4" />
+            </button>
+            <button onClick={() => void regenerate()} title="Generate a new code" className="rounded-lg border border-zinc-700 p-2.5 text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100">
+              <RefreshCcw className="h-4 w-4" />
+            </button>
+          </div>
+          {copied && <p className="mt-2 text-xs text-emerald-400">Copied</p>}
+        </div>
+      )}
+
       <div className="mt-6 divide-y divide-zinc-800/80 rounded-2xl border border-zinc-800 bg-zinc-900/40 px-5">
         <Row label="Start NodeDesk when this computer starts" hint="Keeps the host service reachable">
           <Toggle checked={s.startOnBoot} onChange={(v) => setS({ ...s, startOnBoot: v })} />
         </Row>
-        <Row label="Clipboard synchronization" hint="Text and URLs. Disable on shared machines for privacy">
+        <Row label="Clipboard synchronization" hint="Copy and paste between your computers">
           <Toggle checked={s.clipboardSync} onChange={(v) => setS({ ...s, clipboardSync: v })} />
         </Row>
         <Row label="Use Tailscale when available" hint="Reach your computers away from home, securely">
@@ -125,9 +164,6 @@ export default function SettingsScreen({
           <Row label="HDR streaming" hint="Requires HDR-capable host and client displays">
             <Toggle checked={s.hdr} onChange={(v) => setS({ ...s, hdr: v })} />
           </Row>
-          <button className="flex items-center gap-1.5 text-xs text-zinc-500 hover:text-zinc-300">
-            <ExternalLink className="h-3.5 w-3.5" /> Open Sunshine advanced settings
-          </button>
         </div>
       )}
 

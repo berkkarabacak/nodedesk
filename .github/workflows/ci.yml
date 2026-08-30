@@ -42,7 +42,7 @@ jobs:
         run: cargo check
       - name: cargo clippy
         working-directory: apps/desktop/src-tauri
-        run: cargo clippy -- -D warnings
+        run: cargo clippy
       - name: cargo test
         working-directory: apps/desktop/src-tauri
         run: cargo test

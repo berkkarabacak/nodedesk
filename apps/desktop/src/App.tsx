@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { api, type Computer, type Settings, defaultSettings } from './lib/api'
+import { api, defaultSettings, type Computer, type Settings } from './lib/api'
 import Onboarding from './screens/Onboarding'
 import Dashboard from './screens/Dashboard'
 import DeviceDetail from './screens/DeviceDetail'
@@ -13,19 +13,21 @@ export type Screen =
   | { name: 'diagnostics' }
 
 export default function App() {
-  const [onboarded, setOnboarded] = useState<boolean | null>(null)
+  const [ready, setReady] = useState(false)
+  const [onboarded, setOnboarded] = useState(false)
   const [settings, setSettings] = useState<Settings>(defaultSettings)
   const [screen, setScreen] = useState<Screen>({ name: 'dashboard' })
 
   useEffect(() => {
-    api.getSettings().then((s) => {
-      setSettings(s)
-      // First-run flag: in the real shell this persists via the Rust core.
-      setOnboarded(localStorage.getItem('nodedesk.onboarded') === 'yes')
-    })
+    Promise.all([api.getAppInfo(), api.getSettings()])
+      .then(([info, s]) => {
+        setOnboarded(info.onboarded)
+        setSettings({ ...defaultSettings, ...s })
+      })
+      .finally(() => setReady(true))
   }, [])
 
-  if (onboarded === null) return <div className="min-h-screen bg-zinc-950" />
+  if (!ready) return <div className="min-h-screen bg-zinc-950" />
 
   if (!onboarded) {
     return (
@@ -33,8 +35,6 @@ export default function App() {
         onDone={(mode) => {
           const next = { ...settings, mode }
           setSettings(next)
-          void api.saveSettings(next)
-          localStorage.setItem('nodedesk.onboarded', 'yes')
           setOnboarded(true)
         }}
       />
@@ -61,6 +61,7 @@ export default function App() {
     default:
       return (
         <Dashboard
+          settings={settings}
           onOpenDevice={(computer) => setScreen({ name: 'device', computer })}
           onOpenSettings={() => setScreen({ name: 'settings' })}
           onOpenDiagnostics={() => setScreen({ name: 'diagnostics' })}

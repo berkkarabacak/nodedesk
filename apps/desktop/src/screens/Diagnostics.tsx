@@ -1,20 +1,21 @@
 import { useEffect, useState } from 'react'
-import { ArrowLeft, CheckCircle2, Download, XCircle } from 'lucide-react'
+import { ArrowLeft, CheckCircle2, Download, Loader2, XCircle } from 'lucide-react'
 import { api, type DiagnosticsItem } from '../lib/api'
 
 export default function Diagnostics({ onBack }: { onBack: () => void }) {
   const [items, setItems] = useState<DiagnosticsItem[]>([])
-  const [exported, setExported] = useState(false)
+  const [loading, setLoading] = useState(true)
+  const [exportPath, setExportPath] = useState('')
 
   useEffect(() => {
-    void api.runDiagnostics().then(setItems)
+    void api
+      .runDiagnostics()
+      .then(setItems)
+      .finally(() => setLoading(false))
   }, [])
 
   const exportReport = () => {
-    void api.exportDiagnostics().then(() => {
-      setExported(true)
-      setTimeout(() => setExported(false), 3000)
-    })
+    void api.exportDiagnostics().then(setExportPath)
   }
 
   return (
@@ -26,6 +27,11 @@ export default function Diagnostics({ onBack }: { onBack: () => void }) {
       <p className="mt-1 text-sm text-zinc-500">A quick health check of everything NodeDesk needs.</p>
 
       <div className="mt-6 divide-y divide-zinc-800/80 rounded-2xl border border-zinc-800 bg-zinc-900/40 px-5">
+        {loading && (
+          <div className="flex items-center gap-2 py-4 text-sm text-zinc-500">
+            <Loader2 className="h-4 w-4 animate-spin" /> Checking…
+          </div>
+        )}
         {items.map((i) => (
           <div key={i.label} className="flex items-center justify-between py-3.5">
             <div>
@@ -50,8 +56,13 @@ export default function Diagnostics({ onBack }: { onBack: () => void }) {
         className="mt-6 flex w-full items-center justify-center gap-2 rounded-xl border border-zinc-700 py-3 text-sm font-medium text-zinc-200 hover:bg-zinc-900"
       >
         <Download className="h-4 w-4" />
-        {exported ? 'Report saved — no sensitive data included' : 'Export diagnostic report'}
+        Export diagnostic report
       </button>
+      {exportPath && (
+        <p className="mt-3 break-all rounded-lg border border-zinc-800 bg-zinc-900/60 p-3 text-center text-xs text-zinc-400">
+          Saved to <span className="font-mono text-zinc-200">{exportPath}</span>
+        </p>
+      )}
       <p className="mt-3 text-center text-[11px] text-zinc-600">
         Reports never contain passwords, private keys, tokens or clipboard contents.
       </p>

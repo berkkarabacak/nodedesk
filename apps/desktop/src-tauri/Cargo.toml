@@ -1,6 +1,6 @@
 [package]
 name = "nodedesk"
-version = "0.1.0"
+version = "1.0.0"
 description = "NodeDesk — one-click remote computing built on Sunshine + Moonlight"
 authors = ["NodeDesk contributors"]
 edition = "2021"
@@ -13,6 +13,18 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time"] }
+axum = "0.7"
+sysinfo = "0.32"
+keyring = { version = "3", features = ["windows-native"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
+base64 = "0.22"
+rand = "0.8"
+mac_address = "1"
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.52"
 
 [profile.release]
 panic = "abort"
