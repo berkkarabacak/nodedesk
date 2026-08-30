@@ -4,6 +4,50 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
+pub struct AiService {
+    pub name: String,
+    pub running: bool,
+    pub port: u16,
+}
+
+/// Well-known local AI service ports. Probed on 127.0.0.1 only.
+const AI_SERVICES: &[(&str, u16)] = &[
+    ("Ollama", 11434),
+    ("Open WebUI", 3000),
+    ("Open WebUI (alt)", 8080),
+    ("ComfyUI", 8188),
+    ("Jupyter", 8888),
+    ("vLLM", 8000),
+    ("LM Studio", 1234),
+    ("SD WebUI", 7860),
+];
+
+fn probe_services() -> Vec<AiService> {
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = AI_SERVICES
+            .iter()
+            .map(|(name, port)| {
+                scope.spawn(move || {
+                    let addr: std::net::SocketAddr = ([127, 0, 0, 1], *port).into();
+                    let running = std::net::TcpStream::connect_timeout(
+                        &addr,
+                        std::time::Duration::from_millis(150),
+                    )
+                    .is_ok();
+                    AiService {
+                        name: name.to_string(),
+                        running,
+                        port: *port,
+                    }
+                })
+            })
+            .collect();
+        handles.into_iter().filter_map(|h| h.join().ok()).collect()
+    })
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
 pub struct GpuMetrics {
     pub name: String,
     pub utilization_pct: u8,
@@ -23,6 +67,7 @@ pub struct Metrics {
     pub gpu: Option<GpuMetrics>,
     pub mac: Option<String>,
     pub lan_ip: Option<String>,
+    pub services: Vec<AiService>,
 }
 
 /// NVIDIA metrics via nvidia-smi (present on any NVIDIA driver install).
@@ -78,5 +123,6 @@ pub fn collect() -> Metrics {
         gpu: nvidia_gpu(),
         mac,
         lan_ip: crate::discovery::local_ip(),
+        services: probe_services(),
     }
 }

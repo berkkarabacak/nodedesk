@@ -10,10 +10,12 @@
 
 mod agent;
 mod discovery;
+mod files;
 mod monitor;
 mod moonlight;
 mod state;
 mod sunshine;
+mod terminal;
 mod update;
 mod wol;
 
@@ -67,6 +69,7 @@ struct ComputerDto {
     uptime: Option<String>,
     mac: Option<String>,
     has_access_code: bool,
+    services: Vec<monitor::AiService>,
 }
 
 #[derive(Serialize)]
@@ -110,6 +113,7 @@ fn dto_from_metrics(m: &monitor::Metrics, address: &str, via: &str, has_code: bo
         uptime: Some(fmt_uptime(m.uptime_secs)),
         mac: m.mac.clone(),
         has_access_code: has_code,
+        services: m.services.clone(),
     }
 }
 
@@ -257,6 +261,7 @@ async fn list_computers(state: State<'_, AppState>) -> Result<Vec<ComputerDto>, 
                     uptime: None,
                     mac: manual.and_then(|h| h.mac.clone()),
                     has_access_code: code.is_some(),
+                    services: vec![],
                 })
             }
         }
@@ -476,6 +481,73 @@ async fn check_update(state: State<'_, AppState>) -> Result<update::UpdateInfo, 
     update::check(&state.http, env!("CARGO_PKG_VERSION")).await
 }
 
+// ---------------------------------------------------------------------------
+// File transfer & terminal commands
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+async fn list_files(state: State<'_, AppState>, address: String, path: String) -> Result<Vec<files::FileEntry>, String> {
+    let code = state
+        .settings
+        .read()
+        .ok()
+        .and_then(|s| s.host_codes.get(&address).cloned())
+        .ok_or("No access code stored for this computer")?;
+    let resp = state
+        .http
+        .get(format!("http://{address}:{}/files/list", discovery::AGENT_PORT))
+        .header("x-nodedesk-code", code)
+        .query(&[("path", path)])
+        .timeout(std::time::Duration::from_millis(3000))
+        .send()
+        .await
+        .map_err(|e| format!("can't reach the host: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("host returned HTTP {}", resp.status()));
+    }
+    resp.json::<Vec<files::FileEntry>>().await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn send_files(app: AppHandle, address: String, paths: Vec<String>) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    files::send_files(app.clone(), &state, &address, paths).await
+}
+
+#[tauri::command]
+async fn download_file(app: AppHandle, address: String, path: String) -> Result<String, String> {
+    let state = app.state::<AppState>();
+    files::download_file(app.clone(), &state, &address, &path).await
+}
+
+#[tauri::command]
+fn cancel_transfer(state: State<'_, AppState>) {
+    state.transfer_cancel.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
+#[tauri::command]
+async fn terminal_exec(state: State<'_, AppState>, address: String, command: String, cwd: String) -> Result<terminal::TerminalResult, String> {
+    let code = state
+        .settings
+        .read()
+        .ok()
+        .and_then(|s| s.host_codes.get(&address).cloned())
+        .ok_or("No access code stored for this computer")?;
+    let resp = state
+        .http
+        .post(format!("http://{address}:{}/terminal", discovery::AGENT_PORT))
+        .header("x-nodedesk-code", code)
+        .json(&serde_json::json!({ "command": command, "cwd": cwd }))
+        .timeout(std::time::Duration::from_secs(35))
+        .send()
+        .await
+        .map_err(|e| format!("can't reach the host: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("host returned HTTP {}", resp.status()));
+    }
+    resp.json::<terminal::TerminalResult>().await.map_err(|e| e.to_string())
+}
+
 #[cfg(windows)]
 fn set_autostart(enabled: bool) {
     let Ok(exe) = std::env::current_exe() else { return };
@@ -532,6 +604,11 @@ fn main() {
             get_access_code,
             regenerate_access_code,
             check_update,
+            list_files,
+            send_files,
+            download_file,
+            cancel_transfer,
+            terminal_exec,
         ])
         .run(tauri::generate_context!())
         .expect("error while running NodeDesk");

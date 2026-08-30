@@ -24,6 +24,7 @@ export interface Computer {
   uptime?: string
   mac?: string
   hasAccessCode: boolean
+  services?: AiService[]
 }
 
 export interface ManualHost {
@@ -94,6 +95,32 @@ export interface UpdateInfo {
   url: string
 }
 
+export interface AiService {
+  name: string
+  running: boolean
+  port: number
+}
+
+export interface FileEntry {
+  name: string
+  isDir: boolean
+  size: number
+}
+
+export interface TerminalResult {
+  ok: boolean
+  output: string
+  cwd: string
+}
+
+export interface TransferProgress {
+  direction: 'up' | 'down'
+  file: string
+  doneBytes: number
+  totalBytes: number
+  finished: boolean
+}
+
 const isTauri = '__TAURI_INTERNALS__' in window
 
 async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
@@ -104,12 +131,15 @@ async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T
   return mockInvoke<T>(cmd, args)
 }
 
-type Listener = (payload: string) => void
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type Listener = (payload: any) => void
 
-export async function onEvent(event: 'pair-pin' | 'bootstrap-progress' | 'bootstrap-error' | 'bootstrap-done' | 'stream-started', cb: Listener): Promise<() => void> {
+type NodeDeskEvent = 'pair-pin' | 'bootstrap-progress' | 'bootstrap-error' | 'bootstrap-done' | 'stream-started' | 'transfer-progress'
+
+export async function onEvent(event: NodeDeskEvent, cb: Listener): Promise<() => void> {
   if (isTauri) {
     const { listen } = await import('@tauri-apps/api/event')
-    return listen<string>(event, (e) => cb(e.payload))
+    return listen(event, (e) => cb(e.payload))
   }
   return mockListen(event, cb)
 }
@@ -124,6 +154,12 @@ const mockComputers: Computer[] = [
     online: true, specs: 'RTX 3090 · 64 GB RAM', cpuPct: 14, gpuPct: 72, gpuName: 'NVIDIA RTX 3090',
     ramUsedGb: 41, ramTotalGb: 64, vramUsedGb: 18.2, vramTotalGb: 24, uptime: '6 d 4 h',
     mac: 'AA:BB:CC:DD:EE:01', hasAccessCode: true,
+    services: [
+      { name: 'Ollama', running: true, port: 11434 },
+      { name: 'Open WebUI', running: true, port: 3000 },
+      { name: 'ComfyUI', running: true, port: 8188 },
+      { name: 'vLLM', running: false, port: 8000 },
+    ],
   },
   {
     id: '192.168.1.32', name: 'Old Laptop', os: 'linux', address: '192.168.1.32', via: 'lan',
@@ -148,7 +184,7 @@ function mockListen(event: string, cb: Listener): Promise<() => void> {
   })
 }
 
-function mockEmit(event: string, payload: string) {
+function mockEmit(event: string, payload: unknown) {
   for (const cb of mockListeners[event] ?? []) cb(payload)
 }
 
@@ -223,6 +259,41 @@ async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Promi
       return { current: '1.0.0', latest: '1.0.0', updateAvailable: false, url: '' } as T
     case 'local_metrics':
       return { hostName: 'Demo-PC', os: 'windows', cpuPct: 9, ramUsedGb: 12.4, ramTotalGb: 32, uptimeSecs: 92000 } as T
+    case 'list_files':
+      return [
+        { name: 'Documents', isDir: true, size: 0 },
+        { name: 'models', isDir: true, size: 0 },
+        { name: 'notes.txt', isDir: false, size: 1842 },
+        { name: 'render-final.mp4', isDir: false, size: 734003200 },
+      ] as T
+    case 'send_files': {
+      const paths = (args?.paths as string[]) ?? []
+      let done = 0
+      const total = 734003200
+      const timer = setInterval(() => {
+        done += total / 8
+        mockEmit('transfer-progress', {
+          direction: 'up', file: paths[0]?.split(/[\\/]/).pop() ?? 'file',
+          doneBytes: Math.min(done, total), totalBytes: total, finished: done >= total,
+        })
+        if (done >= total) clearInterval(timer)
+      }, 250)
+      await delay(2200)
+      return undefined as T
+    }
+    case 'download_file':
+      return 'C:\\Users\\demo\\Downloads\\NodeDesk\\render-final.mp4' as T
+    case 'cancel_transfer':
+      return undefined as T
+    case 'terminal_exec': {
+      const command = String(args?.command ?? '')
+      const cwd = String(args?.cwd ?? '') || 'C:\\Users\\demo'
+      return {
+        ok: true,
+        output: command === 'ls' || command === 'dir' ? 'Documents  models  notes.txt  render-final.mp4' : `(mock) ran: ${command}`,
+        cwd: command.startsWith('cd ') ? `${cwd}\\${command.slice(3)}` : cwd,
+      } as T
+    }
     default:
       throw new Error(`Unknown command: ${cmd}`)
   }
@@ -253,4 +324,10 @@ export const api = {
   getAccessCode: () => invoke<string>('get_access_code'),
   regenerateAccessCode: () => invoke<string>('regenerate_access_code'),
   checkUpdate: () => invoke<UpdateInfo>('check_update'),
+  listFiles: (address: string, path: string) => invoke<FileEntry[]>('list_files', { address, path }),
+  sendFiles: (address: string, paths: string[]) => invoke<void>('send_files', { address, paths }),
+  downloadFile: (address: string, path: string) => invoke<string>('download_file', { address, path }),
+  cancelTransfer: () => invoke<void>('cancel_transfer'),
+  terminalExec: (address: string, command: string, cwd: string) =>
+    invoke<TerminalResult>('terminal_exec', { address, command, cwd }),
 }

@@ -61,6 +61,8 @@ pub struct AppState {
     pub http_local: reqwest::Client,
     /// Running Moonlight stream process, if we started one.
     pub stream_child: Mutex<Option<std::process::Child>>,
+    /// Cancellation flag for the active file transfer.
+    pub transfer_cancel: std::sync::atomic::AtomicBool,
 }
 
 impl AppState {
@@ -82,6 +84,7 @@ impl AppState {
             http,
             http_local,
             stream_child: Mutex::new(None),
+            transfer_cancel: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
