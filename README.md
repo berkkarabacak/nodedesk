@@ -123,13 +123,13 @@ vulnerability, see [SECURITY.md](SECURITY.md).
 Priorities, in order: **stability → security → simplicity → performance →
 features.**
 
-**MVP 0.1 (Windows-first):** one installer · host + controller in one app ·
-automatic Sunshine configuration · Moonlight-based desktop connect · LAN
-discovery · simple secure pairing · Tailscale detection · computer dashboard ·
-clipboard text sync · CPU/RAM/GPU info · wake/sleep/restart/shutdown ·
-diagnostics · secure automatic updates.
+**v1.0 (Windows) ships:** one installer · host + controller in one app ·
+automatic Sunshine install & configuration · Moonlight-based desktop connect ·
+LAN discovery · PIN pairing without the web UI · Tailscale detection ·
+computer dashboard with live CPU/RAM/GPU · clipboard sync ·
+wake/sleep/restart/shutdown/lock · diagnostics · update checks.
 
-**After MVP:** file transfer with drag & drop and resume · integrated remote
+**After v1.0:** drag & drop file transfer with resume · integrated remote
 terminal · AI service discovery · automatic headless virtual displays · Linux
 host · macOS controller · beta/nightly channels · hardware compatibility
 matrix.
