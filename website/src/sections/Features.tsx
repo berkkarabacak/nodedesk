@@ -1,60 +1,42 @@
 import {
+  ClipboardList,
   FolderSync,
-  Gauge,
   MonitorSmartphone,
   MousePointerClick,
   Network,
-  ClipboardList,
   Power,
-  TerminalSquare,
-  Wand2,
 } from 'lucide-react'
 
 const features = [
   {
     icon: MousePointerClick,
     title: 'One-click everything',
-    text: 'One installer, one app. Host and controller in a single download — no separate Sunshine/Moonlight setup, no pairing PINs to decipher.',
+    text: 'Host and controller in one installer.',
   },
   {
     icon: MonitorSmartphone,
     title: 'Full remote desktop',
-    text: 'Hardware H.264 / HEVC / AV1, 4K, HDR, high refresh — automatically tuned to your GPU and network. NVIDIA, AMD and Intel supported.',
+    text: 'H.264, HEVC or AV1, 4K, HDR — chosen automatically.',
   },
   {
     icon: Network,
-    title: 'LAN discovery + Tailscale',
-    text: 'Computers on your network appear automatically. If Tailscale is installed, NodeDesk finds your machines across the tailnet. Never exposed to the public internet.',
+    title: 'LAN + Tailscale',
+    text: 'Computers appear automatically. Never internet-exposed.',
   },
   {
     icon: FolderSync,
-    title: 'File transfer built in',
-    text: 'Send files and folders, drag & drop, resume interrupted transfers — over the same authenticated, encrypted connection. No extra tools.',
+    title: 'File transfer',
+    text: 'Send files and folders over an encrypted connection.',
   },
   {
     icon: ClipboardList,
     title: 'Clipboard sync',
-    text: 'Copy on one machine, paste on another. Text and URLs at launch, with images and files under investigation. Can be disabled for privacy.',
+    text: 'Copy here, paste there. Disable anytime.',
   },
   {
     icon: Power,
-    title: 'Power management',
-    text: 'Wake-on-LAN, sleep, restart, shutdown and lock from the dashboard. Wake a sleeping desktop before you connect.',
-  },
-  {
-    icon: Gauge,
-    title: 'Live system insight',
-    text: 'CPU, RAM, GPU and VRAM at a glance — with automatic detection of NVIDIA/AMD/Intel hardware. Metrics stay out of your way until you want them.',
-  },
-  {
-    icon: TerminalSquare,
-    title: 'Remote terminal',
-    text: 'An optional integrated terminal for technical users — SSH on Linux, secure agent-based shell on Windows. Hidden unless you need it.',
-  },
-  {
-    icon: Wand2,
-    title: 'Automatic configuration',
-    text: 'First run detects GPU, encoders, displays, network and host capabilities, then picks sensible defaults. Advanced settings exist — 95% of users never open them.',
+    title: 'Power control',
+    text: 'Wake, sleep, restart, shutdown — from the dashboard.',
   },
 ]
 
@@ -65,14 +47,8 @@ export default function Features() {
         <div className="max-w-2xl">
           <p className="text-sm font-semibold uppercase tracking-widest text-emerald-400">Features</p>
           <h2 className="mt-3 text-3xl font-bold tracking-tight sm:text-4xl">
-            The streaming tech is serious.
-            <br />
-            <span className="text-zinc-500">The experience isn't.</span>
+            Serious streaming. <span className="text-zinc-500">Simple experience.</span>
           </h2>
-          <p className="mt-4 text-zinc-400">
-            NodeDesk hides codecs, ports, certificates and firewall rules behind one calm dashboard — while the
-            battle-tested Sunshine/Moonlight stack does the heavy lifting underneath.
-          </p>
         </div>
 
         <div className="mt-14 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">

@@ -13,9 +13,7 @@ export default function Footer() {
             </span>
             <span className="font-semibold">NodeDesk</span>
           </div>
-          <p className="mt-3 max-w-sm text-sm text-zinc-500">
-            Your computers. One interface. Anywhere. GPL-3.0 licensed open-source software.
-          </p>
+          <p className="mt-3 text-sm text-zinc-500">Your computers. One interface. Anywhere. GPL-3.0.</p>
         </div>
 
         <div className="flex flex-wrap gap-x-8 gap-y-3 text-sm text-zinc-400">
@@ -24,14 +22,11 @@ export default function Footer() {
           </a>
           <a href="https://github.com/berkkarabacak/nodedesk/blob/main/docs/architecture.md" target="_blank" rel="noreferrer" className="hover:text-zinc-100">Architecture</a>
           <a href="https://github.com/berkkarabacak/nodedesk/blob/main/SECURITY.md" target="_blank" rel="noreferrer" className="hover:text-zinc-100">Security policy</a>
-          <a href="https://github.com/berkkarabacak/nodedesk/blob/main/THIRD_PARTY_NOTICES.md" target="_blank" rel="noreferrer" className="hover:text-zinc-100">Third-party notices</a>
         </div>
       </div>
       <div className="mx-auto mt-10 max-w-6xl px-4 sm:px-6">
         <p className="text-xs leading-relaxed text-zinc-600">
-          NodeDesk is built on the Sunshine and Moonlight open-source projects and is grateful to their communities.
-          Sunshine © LizardByte, Moonlight © the Moonlight contributors — both GPL-3.0. NodeDesk is not affiliated
-          with or endorsed by LizardByte or the Moonlight project.
+          Built on Sunshine (LizardByte) and Moonlight, both GPL-3.0. Not affiliated with either project.
         </p>
       </div>
     </footer>

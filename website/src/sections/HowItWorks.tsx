@@ -5,19 +5,19 @@ const steps = [
     icon: Download,
     step: '01',
     title: 'Install',
-    text: 'One installer per machine. It installs the app, configures the host service, firewall rules and secure device identity — automatically.',
+    text: 'One installer configures everything.',
   },
   {
     icon: Radar,
     step: '02',
     title: 'Find your computer',
-    text: 'NodeDesk discovers machines on your LAN (and tailnet, if you use Tailscale). Approve pairing once — the device is trusted from then on.',
+    text: 'LAN machines appear automatically. Approve pairing once.',
   },
   {
     icon: MonitorPlay,
     step: '03',
     title: 'Connect',
-    text: 'Click Connect. Your remote desktop opens with hardware-accelerated video, synced clipboard and file transfer — no settings to tune.',
+    text: 'Hardware-accelerated desktop, synced clipboard, zero tuning.',
   },
 ]
 
@@ -28,11 +28,8 @@ export default function HowItWorks() {
         <div className="mx-auto max-w-2xl text-center">
           <p className="text-sm font-semibold uppercase tracking-widest text-emerald-400">How it works</p>
           <h2 className="mt-3 text-3xl font-bold tracking-tight sm:text-4xl">
-            Fresh PC → remote desktop in under 2 minutes
+            Fresh PC to remote desktop in under two minutes
           </h2>
-          <p className="mt-4 text-zinc-400">
-            You will never see the words “codec”, “port” or “pairing PIN” unless you go looking for them.
-          </p>
         </div>
 
         <div className="mt-14 grid gap-6 md:grid-cols-3">
@@ -51,16 +48,6 @@ export default function HowItWorks() {
               <p className="mt-2 text-sm leading-relaxed text-zinc-400">{s.text}</p>
             </div>
           ))}
-        </div>
-
-        <div className="mx-auto mt-12 max-w-3xl overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950">
-          <div className="border-b border-zinc-800 px-4 py-2 text-xs text-zinc-500">What NodeDesk asks on first run — that's it</div>
-          <div className="p-5 font-mono text-sm leading-7">
-            <p className="text-zinc-400">How do you want to use this computer?</p>
-            <p className="text-zinc-300"><span className="text-emerald-400">›</span> Control my computers</p>
-            <p className="text-zinc-300"><span className="text-emerald-400">›</span> Allow this computer to be controlled</p>
-            <p className="text-zinc-300"><span className="text-emerald-400">›</span> <span className="rounded bg-emerald-500/15 px-1.5 py-0.5 text-emerald-300">Both (recommended)</span></p>
-          </div>
         </div>
       </div>
     </section>

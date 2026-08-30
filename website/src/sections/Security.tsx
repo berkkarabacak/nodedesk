@@ -1,35 +1,25 @@
-import { KeyRound, Lock, ShieldCheck, FileWarning, Fingerprint, EyeOff } from 'lucide-react'
+import { KeyRound, ShieldCheck, FileWarning, RefreshCcw } from 'lucide-react'
 
 const items = [
   {
     icon: KeyRound,
     title: 'Authenticated pairing',
-    text: 'Every device is explicitly approved before it can connect. Pairing reuses Sunshine/Moonlight’s proven certificate handshake — never weakened for convenience.',
-  },
-  {
-    icon: Lock,
-    title: 'Encrypted end to end',
-    text: 'Streaming, file transfer and clipboard data all travel over encrypted channels with verified device certificates.',
-  },
-  {
-    icon: EyeOff,
-    title: 'Never internet-exposed',
-    text: 'NodeDesk works on LAN by default and integrates with Tailscale for remote access. It does not silently open your host to the public internet.',
-  },
-  {
-    icon: Fingerprint,
-    title: 'Secure device identity',
-    text: 'Each machine gets a generated identity stored in OS-provided secure storage (Windows Credential Manager, Keychain, libsecret).',
+    text: 'Both devices approve once. Certificates do the rest.',
   },
   {
     icon: ShieldCheck,
-    title: 'Simple trust model',
-    text: 'A plain list of trusted computers. Revoke any device in one click — no certificate jargon required.',
+    title: 'One-click revoke',
+    text: 'A plain list of trusted computers. Remove any device instantly.',
   },
   {
     icon: FileWarning,
-    title: 'Clean diagnostics',
-    text: 'Exportable diagnostic reports never include passwords, private keys, tokens or clipboard contents.',
+    title: 'Safe diagnostics',
+    text: 'Reports never include passwords, keys or clipboard data.',
+  },
+  {
+    icon: RefreshCcw,
+    title: 'Signed updates',
+    text: 'Unsigned updates never run.',
   },
 ]
 
@@ -40,11 +30,10 @@ export default function Security() {
         <div className="max-w-2xl">
           <p className="text-sm font-semibold uppercase tracking-widest text-emerald-400">Security</p>
           <h2 className="mt-3 text-3xl font-bold tracking-tight sm:text-4xl">
-            Simple for you. <span className="text-zinc-500">Strict under the hood.</span>
+            Simple for you. <span className="text-zinc-500">Strict underneath.</span>
           </h2>
           <p className="mt-4 text-zinc-400">
-            No unauthenticated remote-desktop access — ever. Onboarding is easy because the hard parts are automated,
-            not because the security is weaker. The full threat model lives in{' '}
+            Encrypted sessions, keys in OS secure storage, never internet-exposed. Full model:{' '}
             <a
               href="https://github.com/berkkarabacak/nodedesk/blob/main/docs/security.md"
               target="_blank"
@@ -57,7 +46,7 @@ export default function Security() {
           </p>
         </div>
 
-        <div className="mt-12 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        <div className="mt-12 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           {items.map((i) => (
             <div key={i.title} className="rounded-2xl border border-zinc-800 bg-zinc-950/60 p-6">
               <i.icon className="h-5 w-5 text-emerald-400" />

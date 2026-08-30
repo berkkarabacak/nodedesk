@@ -14,26 +14,12 @@ export default function AISection() {
         <div>
           <p className="text-sm font-semibold uppercase tracking-widest text-emerald-400">AI workstations</p>
           <h2 className="mt-3 text-3xl font-bold tracking-tight sm:text-4xl">
-            Built for the machine with the big GPU
+            Made for the machine with the big GPU
           </h2>
           <p className="mt-4 leading-relaxed text-zinc-400">
-            NodeDesk treats AI boxes as first-class citizens. It detects your GPU, tracks VRAM in real time, and can
-            surface locally running services like Ollama, Open WebUI, ComfyUI, Jupyter or vLLM — so the spare desktop
-            under your desk becomes a reachable, usable AI server.
+            GPU and VRAM on the dashboard. Headless boxes get a virtual display. Ollama, Open WebUI and ComfyUI
+            detection planned.
           </p>
-          <ul className="mt-6 space-y-3 text-sm text-zinc-300">
-            {[
-              'GPU + VRAM utilization on the dashboard',
-              'Headless machines: virtual display created automatically',
-              'Service discovery designed in from day one (post-MVP)',
-              'Wake the workstation, connect, open Open WebUI — done',
-            ].map((item) => (
-              <li key={item} className="flex items-start gap-2.5">
-                <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-400" />
-                {item}
-              </li>
-            ))}
-          </ul>
         </div>
 
         <div className="rounded-2xl border border-zinc-800 bg-zinc-900/50 p-6">

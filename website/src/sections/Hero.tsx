@@ -1,4 +1,4 @@
-import { ArrowRight, Cpu, Download, Github, Monitor, Moon, Power } from 'lucide-react'
+import { Cpu, Download, Github, Monitor } from 'lucide-react'
 
 function ComputerCard({
   name,
@@ -20,11 +20,9 @@ function ComputerCard({
           <span className={`h-2.5 w-2.5 rounded-full ${online ? 'bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)]' : 'bg-zinc-600'}`} />
           <span className="font-medium text-zinc-100">{name}</span>
         </div>
-        {online ? (
-          <span className="rounded-md bg-emerald-500/10 px-2 py-1 text-[10px] font-medium text-emerald-400">ONLINE</span>
-        ) : (
-          <span className="rounded-md bg-zinc-800 px-2 py-1 text-[10px] font-medium text-zinc-500">OFFLINE</span>
-        )}
+        <span className={`rounded-md px-2 py-1 text-[10px] font-medium ${online ? 'bg-emerald-500/10 text-emerald-400' : 'bg-zinc-800 text-zinc-500'}`}>
+          {online ? 'ONLINE' : 'OFFLINE'}
+        </span>
       </div>
       <p className="mt-1.5 text-xs text-zinc-500">{specs}</p>
       {online && cpu !== undefined && (
@@ -61,7 +59,6 @@ function ComputerCard({
 export default function Hero() {
   return (
     <section id="top" className="relative overflow-hidden pt-32 pb-20 sm:pt-40">
-      {/* background glow + grid */}
       <div className="pointer-events-none absolute inset-0">
         <div className="absolute left-1/2 top-0 h-[500px] w-[900px] -translate-x-1/2 rounded-full bg-emerald-500/10 blur-[140px]" />
         <div
@@ -79,7 +76,7 @@ export default function Hero() {
         <div>
           <div className="inline-flex items-center gap-2 rounded-full border border-zinc-800 bg-zinc-900/60 px-3.5 py-1.5 text-xs text-zinc-400">
             <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
-            Built on the Sunshine + Moonlight ecosystem
+            Built on Sunshine + Moonlight
           </div>
           <h1 className="mt-6 text-4xl font-bold leading-[1.08] tracking-tight sm:text-5xl lg:text-6xl">
             Your computers.
@@ -88,12 +85,11 @@ export default function Hero() {
             <br />
             <span className="bg-gradient-to-r from-emerald-400 to-teal-300 bg-clip-text text-transparent">Anywhere.</span>
           </h1>
-          <p className="mt-6 max-w-lg text-lg leading-relaxed text-zinc-400">
-            NodeDesk is an open-source remote-computing app with the simplicity of Parsec, powered by
-            Sunshine/Moonlight — designed for workstations, coding, and AI machines, not gaming.
+          <p className="mt-6 max-w-md text-lg leading-relaxed text-zinc-400">
+            Open-source, one-click remote computing — designed for work, not gaming.
           </p>
           <p className="mt-3 font-mono text-sm text-zinc-500">
-            Install → Find your computer → Connect. <span className="text-zinc-300">Under 2 minutes.</span>
+            Install → Find your computer → Connect. <span className="text-zinc-300">Under two minutes.</span>
           </p>
           <div className="mt-8 flex flex-wrap items-center gap-3">
             <a
@@ -115,10 +111,9 @@ export default function Hero() {
               View on GitHub
             </a>
           </div>
-          <p className="mt-4 text-xs text-zinc-600">GPL-3.0 · Windows first, Linux & macOS on the roadmap</p>
+          <p className="mt-4 text-xs text-zinc-600">GPL-3.0 · Windows first</p>
         </div>
 
-        {/* App preview mock */}
         <div className="relative">
           <div className="absolute -inset-4 rounded-3xl bg-emerald-500/5 blur-2xl" />
           <div className="relative rounded-2xl border border-zinc-800 bg-zinc-950/90 shadow-2xl shadow-black/60">
@@ -126,26 +121,15 @@ export default function Hero() {
               <span className="h-3 w-3 rounded-full bg-zinc-700" />
               <span className="h-3 w-3 rounded-full bg-zinc-700" />
               <span className="h-3 w-3 rounded-full bg-zinc-700" />
-              <span className="ml-3 text-xs font-medium tracking-widest text-zinc-500">NODEDESK — MY COMPUTERS</span>
+              <span className="ml-3 text-xs font-medium tracking-widest text-zinc-500">MY COMPUTERS</span>
             </div>
             <div className="space-y-3 p-4">
               <ComputerCard name="AI Workstation" specs="RTX 3090 · 64 GB RAM · Windows" cpu={14} gpu={72} online />
               <ComputerCard name="Old Laptop" specs="Intel i7 · 16 GB · Linux" cpu={8} online />
               <ComputerCard name="Bedroom PC" specs="Last seen 2 h ago" online={false} />
-              <div className="flex items-center justify-between rounded-xl border border-dashed border-zinc-800 px-4 py-3 text-xs text-zinc-500">
-                <span className="flex items-center gap-2">
-                  <Moon className="h-3.5 w-3.5" /> 2 more computers found on your network
-                </span>
-                <span className="flex items-center gap-1 text-emerald-400">
-                  Add <ArrowRight className="h-3 w-3" />
-                </span>
-              </div>
             </div>
-            <div className="flex items-center justify-between border-t border-zinc-800 px-4 py-2.5 text-[11px] text-zinc-600">
-              <span className="flex items-center gap-1.5">
-                <Power className="h-3 w-3 text-emerald-500" /> Host service: OK
-              </span>
-              <span>Tailscale: Connected</span>
+            <div className="border-t border-zinc-800 px-4 py-2.5 text-[11px] text-zinc-600">
+              Host: OK · Tailscale: Connected
             </div>
           </div>
         </div>

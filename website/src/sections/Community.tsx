@@ -9,19 +9,10 @@ export default function Community() {
             <div>
               <p className="text-sm font-semibold uppercase tracking-widest text-emerald-400">Open source</p>
               <h2 className="mt-3 text-3xl font-bold tracking-tight sm:text-4xl">
-                Standing on the shoulders of Sunshine & Moonlight
+                Standing on Sunshine & Moonlight's shoulders
               </h2>
               <p className="mt-4 leading-relaxed text-zinc-400">
-                NodeDesk does not reinvent streaming. It wraps the excellent open-source{' '}
-                <a href="https://github.com/LizardByte/Sunshine" target="_blank" rel="noreferrer" className="text-emerald-400 hover:text-emerald-300">
-                  Sunshine
-                </a>{' '}
-                host and{' '}
-                <a href="https://github.com/moonlight-stream" target="_blank" rel="noreferrer" className="text-emerald-400 hover:text-emerald-300">
-                  Moonlight
-                </a>{' '}
-                client technology in an installer, a dashboard and a networking layer anyone can use. Upstream
-                compatibility is a design goal; generally useful fixes go upstream, not into permanent forks.
+                NodeDesk wraps their streaming tech in a product anyone can use. Fixes go upstream.
               </p>
               <div className="mt-7 flex flex-wrap gap-3">
                 <a
