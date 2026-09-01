@@ -11,7 +11,7 @@ concurrency:
 
 jobs:
   desktop-frontend:
-    name: Desktop front-end (lint · typecheck · build)
+    name: Desktop front-end (test · typecheck · build)
     runs-on: windows-latest
     defaults:
       run:
@@ -24,6 +24,7 @@ jobs:
           cache: npm
           cache-dependency-path: apps/desktop/package-lock.json
       - run: npm ci
+      - run: npm test
       - run: npm run build
 
   desktop-core:

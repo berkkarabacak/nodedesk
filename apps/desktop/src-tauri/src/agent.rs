@@ -210,10 +210,9 @@ async fn terminal_exec(
     Json(terminal::execute(&body.command, &body.cwd.unwrap_or_default())).into_response()
 }
 
-/// Starts the agent. Runs for the lifetime of the app.
-pub async fn run(access_code: String) {
-    let ctx = Arc::new(AgentCtx { access_code });
-    let app = Router::new()
+/// Router with all agent routes (extracted for integration tests).
+pub fn router(ctx: Arc<AgentCtx>) -> Router {
+    Router::new()
         .route("/metrics", get(metrics))
         .route("/power", post(power))
         .route("/files/list", get(files_list))
@@ -221,11 +220,150 @@ pub async fn run(access_code: String) {
         .route("/files/download", get(files_download))
         .route("/files/upload", post(files_upload))
         .route("/terminal", post(terminal_exec))
-        .with_state(ctx);
+        .with_state(ctx)
+}
+
+/// Starts the agent. Runs for the lifetime of the app.
+pub async fn run(access_code: String) {
+    let ctx = Arc::new(AgentCtx { access_code });
     let listener =
         match tokio::net::TcpListener::bind(("0.0.0.0", crate::discovery::AGENT_PORT)).await {
             Ok(l) => l,
             Err(_) => return, // another instance is already serving
         };
-    let _ = axum::serve(listener, app).await;
+    let _ = axum::serve(listener, router(ctx)).await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::Body;
+    use axum::http::Request;
+    use tower::ServiceExt;
+
+    fn test_router() -> Router {
+        router(Arc::new(AgentCtx {
+            access_code: "TEST-CODE".into(),
+        }))
+    }
+
+    fn authed(uri: &str) -> Request<Body> {
+        Request::builder()
+            .uri(uri)
+            .header("x-nodedesk-code", "TEST-CODE")
+            .body(Body::empty())
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn rejects_missing_or_wrong_code() {
+        let resp = test_router()
+            .oneshot(Request::builder().uri("/metrics").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+        let resp = test_router()
+            .oneshot(
+                Request::builder()
+                    .uri("/metrics")
+                    .header("x-nodedesk-code", "WRONG")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn serves_metrics_with_code() {
+        let resp = test_router().oneshot(authed("/metrics")).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), 1_000_000).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(v.get("hostName").is_some());
+        assert!(v.get("services").is_some());
+    }
+
+    #[tokio::test]
+    async fn file_upload_download_roundtrip_with_resume() {
+        let dir = std::env::temp_dir().join("nodedesk-agent-test");
+        let path = dir.join("roundtrip.bin");
+        let _ = std::fs::remove_dir_all(&dir);
+        let p = path.to_string_lossy().replace('\', "/");
+
+        let up = test_router()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/files/upload?path={p}&offset=0"))
+                    .header("x-nodedesk-code", "TEST-CODE")
+                    .body(Body::from("hello "))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(up.status(), StatusCode::OK);
+
+        let up2 = test_router()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/files/upload?path={p}&offset=6"))
+                    .header("x-nodedesk-code", "TEST-CODE")
+                    .body(Body::from("world"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(up2.status(), StatusCode::OK);
+
+        // Stat reports the resumed size.
+        let stat = test_router()
+            .oneshot(authed(&format!("/files/stat?path={p}")))
+            .await
+            .unwrap();
+        let bytes = axum::body::to_bytes(stat.into_body(), 1_000_000).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(v["size"].as_u64().unwrap(), 11);
+
+        // Download from offset = resume.
+        let down = test_router()
+            .oneshot(authed(&format!("/files/download?path={p}&offset=6")))
+            .await
+            .unwrap();
+        let bytes = axum::body::to_bytes(down.into_body(), 1_000_000).await.unwrap();
+        assert_eq!(&bytes[..], b"world");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn terminal_executes_and_reports_cwd() {
+        let resp = test_router()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/terminal")
+                    .header("content-type", "application/json")
+                    .header("x-nodedesk-code", "TEST-CODE")
+                    .body(Body::from(r#"{"command":"echo nodedesk-agent-ok"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), 1_000_000).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(v["output"].as_str().unwrap_or("").contains("nodedesk-agent-ok"));
+        assert!(!v["cwd"].as_str().unwrap_or("").is_empty());
+    }
+
+    #[test]
+    fn constant_time_compare() {
+        assert!(constant_time_eq(b"abc", b"abc"));
+        assert!(!constant_time_eq(b"abc", b"abd"));
+        assert!(!constant_time_eq(b"abc", b"abcd"));
+    }
 }

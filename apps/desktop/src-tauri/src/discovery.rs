@@ -136,3 +136,28 @@ pub fn local_ip() -> Option<String> {
     socket.connect("8.8.8.8:80").ok()?;
     Some(socket.local_addr().ok()?.ip().to_string())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn found_host_serde_camel_case() {
+        let h = FoundHost {
+            name: "AI-PC".into(),
+            os: "windows".into(),
+            address: "192.168.1.20".into(),
+            via: "lan".into(),
+        };
+        let text = serde_json::to_string(&h).unwrap();
+        let back: FoundHost = serde_json::from_str(&text).unwrap();
+        assert_eq!(back.name, "AI-PC");
+        assert_eq!(back.via, "lan");
+    }
+
+    #[test]
+    fn local_ip_does_not_panic_offline() {
+        // May return None without network; must never panic.
+        let _ = local_ip();
+    }
+}

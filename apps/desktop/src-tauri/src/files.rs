@@ -281,3 +281,37 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 }
+
+#[cfg(test)]
+mod extra_tests {
+    use super::*;
+
+    #[test]
+    fn stat_missing_file_errors() {
+        assert!(stat("Z:/definitely/not/here.bin").is_err());
+    }
+
+    #[test]
+    fn list_dir_puts_dirs_first() {
+        let dir = std::env::temp_dir().join(format!("nodedesk-list-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("zdir")).unwrap();
+        std::fs::write(dir.join("afile.txt"), b"x").unwrap();
+        let entries = list_dir(&dir.to_string_lossy()).unwrap();
+        assert!(entries.len() == 2);
+        assert!(entries[0].is_dir);
+        assert_eq!(entries[0].name, "zdir");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn overwrite_at_offset() {
+        let path = std::env::temp_dir().join(format!("nodedesk-offset-{}", std::process::id()));
+        let path = path.to_string_lossy().to_string();
+        let _ = std::fs::remove_file(&path);
+        write_at(&path, 0, b"abcdef").unwrap();
+        write_at(&path, 2, b"XY").unwrap();
+        assert_eq!(read_from(&path, 0).unwrap(), b"abXYef");
+        let _ = std::fs::remove_file(&path);
+    }
+}

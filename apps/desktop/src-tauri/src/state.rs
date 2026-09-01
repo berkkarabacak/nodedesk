@@ -135,3 +135,57 @@ pub fn random_code(len: usize) -> String {
         .map(|_| ALPHABET[rng.gen_range(0..ALPHABET.len())] as char)
         .collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn settings_json_roundtrip() {
+        let mut s = Settings::default();
+        s.bitrate_mbps = 77;
+        s.host_codes.insert("10.0.0.2".into(), "CODE-1234".into());
+        s.manual_hosts.push(ManualHost {
+            name: "Box".into(),
+            address: "10.0.0.2".into(),
+            mac: Some("AA:BB:CC:DD:EE:FF".into()),
+        });
+        let text = serde_json::to_string(&s).unwrap();
+        let back: Settings = serde_json::from_str(&text).unwrap();
+        assert_eq!(back.bitrate_mbps, 77);
+        assert_eq!(back.host_codes.get("10.0.0.2").unwrap(), "CODE-1234");
+        assert_eq!(back.manual_hosts[0].name, "Box");
+        assert!(back.onboarded == s.onboarded);
+    }
+
+    #[test]
+    fn defaults_match_spec() {
+        let s = Settings::default();
+        assert_eq!(s.mode, "both");
+        assert!(s.clipboard_sync);
+        assert!(s.tailscale_enabled);
+        assert_eq!(s.codec, "auto");
+    }
+
+    #[test]
+    fn access_codes_are_unambiguous() {
+        let code = random_code(8);
+        assert_eq!(code.len(), 8);
+        assert!(code.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit()));
+        assert!(!code.contains('0') && !code.contains('O') && !code.contains('1') && !code.contains('I'));
+    }
+
+    #[test]
+    fn settings_file_persistence() {
+        let dir = std::env::temp_dir().join(format!("nodedesk-state-test-{}", std::process::id()));
+        let state = AppState::new(dir.clone());
+        {
+            let mut s = state.settings.write().unwrap();
+            s.fps = 144;
+        }
+        state.save_settings();
+        let reloaded = AppState::new(dir.clone());
+        assert_eq!(reloaded.settings.read().unwrap().fps, 144);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

@@ -53,7 +53,9 @@ mod tests {
     fn semver_compare() {
         assert!(version_newer("v1.0.1", "1.0.0"));
         assert!(version_newer("v2.0.0", "1.9.9"));
+        assert!(version_newer("1.0.1", "v1.0.0"));
         assert!(!version_newer("v1.0.0", "1.0.0"));
         assert!(!version_newer("v0.9.0", "1.0.0"));
+        assert!(!version_newer("v1.0", "1.0.1"));
     }
 }

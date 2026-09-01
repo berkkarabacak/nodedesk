@@ -270,13 +270,20 @@ fn auth_header() -> Result<String, String> {
     ))
 }
 
+/// Normalizes a user-typed PIN: digits only, exactly four.
+pub fn clean_pin(pin: &str) -> Option<String> {
+    let clean: String = pin.chars().filter(|c| c.is_ascii_digit()).collect();
+    if clean.len() == 4 {
+        Some(clean)
+    } else {
+        None
+    }
+}
+
 /// Approves a pairing PIN the controller is showing. This is the same call
 /// Sunshine's own web UI makes — NodeDesk just removes the web-UI detour.
 pub async fn approve_pin(client: &reqwest::Client, pin: &str) -> Result<(), String> {
-    let clean: String = pin.chars().filter(|c| c.is_ascii_digit()).collect();
-    if clean.len() != 4 {
-        return Err("PIN must be the 4 digits shown on the other computer".into());
-    }
+    let clean = clean_pin(pin).ok_or("PIN must be the 4 digits shown on the other computer")?;
     let resp = client
         .post(format!("{SUNSHINE_API}/api/pin"))
         .header("Authorization", auth_header()?)
@@ -301,4 +308,19 @@ pub async fn api_reachable(client: &reqwest::Client) -> bool {
         .await
         .map(|r| r.status().is_success())
         .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pin_cleaning() {
+        assert_eq!(clean_pin("1234"), Some("1234".to_string()));
+        assert_eq!(clean_pin(" 1 2 3 4 "), Some("1234".to_string()));
+        assert_eq!(clean_pin("12-34"), Some("1234".to_string()));
+        assert_eq!(clean_pin("123"), None);
+        assert_eq!(clean_pin("12345"), None);
+        assert_eq!(clean_pin("abcd"), None);
+    }
 }

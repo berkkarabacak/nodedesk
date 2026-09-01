@@ -27,6 +27,9 @@ dirs = "5"
 [target.'cfg(windows)'.dependencies]
 winreg = "0.52"
 
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+
 [profile.release]
 panic = "abort"
 codegen-units = 1
