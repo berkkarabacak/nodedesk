@@ -223,14 +223,18 @@ pub fn router(ctx: Arc<AgentCtx>) -> Router {
         .with_state(ctx)
 }
 
-/// Starts the agent. Runs for the lifetime of the app.
+/// Starts the agent on the configured port. Runs for the app's lifetime.
 pub async fn run(access_code: String) {
+    run_on(crate::discovery::agent_port(), access_code).await
+}
+
+/// Port-parameterized so tests can run simulated machines side by side.
+pub async fn run_on(port: u16, access_code: String) {
     let ctx = Arc::new(AgentCtx { access_code });
-    let listener =
-        match tokio::net::TcpListener::bind(("0.0.0.0", crate::discovery::AGENT_PORT)).await {
-            Ok(l) => l,
-            Err(_) => return, // another instance is already serving
-        };
+    let listener = match tokio::net::TcpListener::bind(("0.0.0.0", port)).await {
+        Ok(l) => l,
+        Err(_) => return, // another instance is already serving
+    };
     let _ = axum::serve(listener, router(ctx)).await;
 }
 

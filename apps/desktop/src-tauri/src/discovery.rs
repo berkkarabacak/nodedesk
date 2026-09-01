@@ -9,6 +9,21 @@ pub const DISCOVERY_PORT: u16 = 47800;
 pub const AGENT_PORT: u16 = 47801;
 const MAGIC: &[u8] = b"NODEDESK_DISCOVER_V1";
 
+/// Ports are env-overridable so tests can run simulated machines side by side.
+pub fn discovery_port() -> u16 {
+    std::env::var("NODEDEK_DISCOVERY_PORT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(DISCOVERY_PORT)
+}
+
+pub fn agent_port() -> u16 {
+    std::env::var("NODEDEK_AGENT_PORT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(AGENT_PORT)
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct FoundHost {
@@ -20,8 +35,12 @@ pub struct FoundHost {
 
 /// Answers discovery beacons forever. Started once at app launch.
 pub fn start_responder() {
-    std::thread::spawn(|| {
-        let Ok(socket) = UdpSocket::bind(("0.0.0.0", DISCOVERY_PORT)) else {
+    start_responder_on(discovery_port());
+}
+
+pub fn start_responder_on(port: u16) {
+    std::thread::spawn(move || {
+        let Ok(socket) = UdpSocket::bind(("0.0.0.0", port)) else {
             return; // another NodeDesk instance already answers
         };
         let name = sysinfo::System::host_name().unwrap_or_else(|| "NodeDesk PC".into());
@@ -41,6 +60,10 @@ pub fn start_responder() {
 
 /// Broadcasts a beacon and collects answers for `timeout_ms`.
 pub fn scan(timeout_ms: u64) -> Vec<FoundHost> {
+    scan_on(discovery_port(), timeout_ms, false)
+}
+
+pub fn scan_on(port: u16, timeout_ms: u64, include_loopback: bool) -> Vec<FoundHost> {
     let mut found: Vec<FoundHost> = vec![];
     let Ok(socket) = UdpSocket::bind(("0.0.0.0", 0)) else {
         return found;
@@ -48,7 +71,10 @@ pub fn scan(timeout_ms: u64) -> Vec<FoundHost> {
     if socket.set_broadcast(true).is_err() {
         return found;
     }
-    let _ = socket.send_to(MAGIC, ("255.255.255.255", DISCOVERY_PORT));
+    let _ = socket.send_to(MAGIC, ("255.255.255.255", port));
+    if include_loopback {
+        let _ = socket.send_to(MAGIC, ("127.0.0.1", port));
+    }
     let _ = socket.set_read_timeout(Some(Duration::from_millis(150)));
 
     let deadline = std::time::Instant::now() + Duration::from_millis(timeout_ms);
@@ -122,7 +148,7 @@ pub fn tailscale_peers() -> Vec<FoundHost> {
 /// response (even 401) proves a NodeDesk host is there.
 pub async fn agent_present(client: &reqwest::Client, address: &str) -> bool {
     client
-        .get(format!("http://{address}:{AGENT_PORT}/metrics"))
+        .get(format!("http://{address}:{}/metrics", agent_port()))
         .timeout(Duration::from_millis(700))
         .send()
         .await

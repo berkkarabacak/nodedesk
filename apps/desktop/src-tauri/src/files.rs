@@ -7,9 +7,7 @@
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::sync::atomic::Ordering;
-use tauri::{AppHandle, Emitter};
 
-use crate::discovery::AGENT_PORT;
 use crate::state::AppState;
 
 const CHUNK: usize = 4 * 1024 * 1024; // 4 MiB
@@ -95,6 +93,9 @@ pub fn write_at(path: &str, offset: u64, data: &[u8]) -> Result<u64, String> {
 }
 
 pub fn incoming_dir() -> String {
+    if let Ok(dir) = std::env::var("NODEDEK_INCOMING_DIR") {
+        return dir;
+    }
     dirs::home_dir()
         .unwrap_or_else(|| std::path::PathBuf::from("."))
         .join("NodeDesk-Incoming")
@@ -105,10 +106,6 @@ pub fn incoming_dir() -> String {
 // ---------------------------------------------------------------------------
 // Client-side transfers (called via Tauri commands)
 // ---------------------------------------------------------------------------
-
-fn emit(app: &AppHandle, p: &TransferProgress) {
-    let _ = app.emit("transfer-progress", p);
-}
 
 fn code_for(state: &AppState, address: &str) -> Result<String, String> {
     state
@@ -123,10 +120,18 @@ fn cancelled(state: &AppState) -> bool {
     state.transfer_cancel.load(Ordering::SeqCst)
 }
 
-pub async fn send_files(app: AppHandle, state: &AppState, address: &str, paths: Vec<String>) -> Result<(), String> {
+/// Sends local files to a host's incoming folder, resuming partial uploads.
+/// `emit` receives progress updates (the command layer forwards them to the UI).
+pub async fn send_files(
+    state: &AppState,
+    address: &str,
+    paths: Vec<String>,
+    emit: &(dyn Fn(&TransferProgress) + Send + Sync),
+) -> Result<(), String> {
     let code = code_for(state, address)?;
     state.transfer_cancel.store(false, Ordering::SeqCst);
     let remote_dir = incoming_dir();
+    let port = crate::discovery::agent_port();
 
     for path in &paths {
         if cancelled(state) {
@@ -144,7 +149,7 @@ pub async fn send_files(app: AppHandle, state: &AppState, address: &str, paths: 
         // Resume: ask the host how much it already has.
         let mut offset: u64 = match state
             .http
-            .get(format!("http://{address}:{AGENT_PORT}/files/stat"))
+            .get(format!("http://{address}:{port}/files/stat"))
             .header("x-nodedesk-code", &code)
             .query(&[("path", &remote_path)])
             .send()
@@ -170,7 +175,7 @@ pub async fn send_files(app: AppHandle, state: &AppState, address: &str, paths: 
             }
             let resp = state
                 .http
-                .post(format!("http://{address}:{AGENT_PORT}/files/upload"))
+                .post(format!("http://{address}:{port}/files/upload"))
                 .header("x-nodedesk-code", &code)
                 .query(&[("path", remote_path.clone()), ("offset", offset.to_string())])
                 .body(buf[..read].to_vec())
@@ -181,24 +186,28 @@ pub async fn send_files(app: AppHandle, state: &AppState, address: &str, paths: 
                 return Err(format!("host rejected the upload (HTTP {})", resp.status()));
             }
             offset += read as u64;
-            emit(
-                &app,
-                &TransferProgress {
-                    direction: "up".into(),
-                    file: name.clone(),
-                    done_bytes: offset,
-                    total_bytes: total,
-                    finished: offset >= total,
-                },
-            );
+            emit(&TransferProgress {
+                direction: "up".into(),
+                file: name.clone(),
+                done_bytes: offset,
+                total_bytes: total,
+                finished: offset >= total,
+            });
         }
     }
     Ok(())
 }
 
-pub async fn download_file(app: AppHandle, state: &AppState, address: &str, remote_path: &str) -> Result<String, String> {
+/// Downloads a remote file into ~/Downloads/NodeDesk, resuming partial files.
+pub async fn download_file(
+    state: &AppState,
+    address: &str,
+    remote_path: &str,
+    emit: &(dyn Fn(&TransferProgress) + Send + Sync),
+) -> Result<String, String> {
     let code = code_for(state, address)?;
     state.transfer_cancel.store(false, Ordering::SeqCst);
+    let port = crate::discovery::agent_port();
 
     let name = std::path::Path::new(remote_path)
         .file_name()
@@ -207,7 +216,7 @@ pub async fn download_file(app: AppHandle, state: &AppState, address: &str, remo
 
     let total: u64 = state
         .http
-        .get(format!("http://{address}:{AGENT_PORT}/files/stat"))
+        .get(format!("http://{address}:{port}/files/stat"))
         .header("x-nodedesk-code", &code)
         .query(&[("path", remote_path)])
         .send()
@@ -218,7 +227,10 @@ pub async fn download_file(app: AppHandle, state: &AppState, address: &str, remo
         .map_err(|e| e.to_string())?
         .size;
 
-    let local_dir = dirs::download_dir()
+    let local_dir = std::env::var("NODEDEK_DOWNLOAD_DIR")
+        .ok()
+        .map(std::path::PathBuf::from)
+        .or_else(dirs::download_dir)
         .unwrap_or_else(|| dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from(".")))
         .join("NodeDesk");
     std::fs::create_dir_all(&local_dir).map_err(|e| e.to_string())?;
@@ -237,7 +249,7 @@ pub async fn download_file(app: AppHandle, state: &AppState, address: &str, remo
         }
         let bytes = state
             .http
-            .get(format!("http://{address}:{AGENT_PORT}/files/download"))
+            .get(format!("http://{address}:{port}/files/download"))
             .header("x-nodedesk-code", &code)
             .query(&[("path", remote_path.to_string()), ("offset", offset.to_string())])
             .send()
@@ -251,16 +263,13 @@ pub async fn download_file(app: AppHandle, state: &AppState, address: &str, remo
         }
         file.write_all(&bytes).map_err(|e| e.to_string())?;
         offset += bytes.len() as u64;
-        emit(
-            &app,
-            &TransferProgress {
-                direction: "down".into(),
-                file: name.clone(),
-                done_bytes: offset,
-                total_bytes: total,
-                finished: offset >= total,
-            },
-        );
+        emit(&TransferProgress {
+            direction: "down".into(),
+            file: name.clone(),
+            done_bytes: offset,
+            total_bytes: total,
+            finished: offset >= total,
+        });
     }
     Ok(local_path.to_string_lossy().to_string())
 }

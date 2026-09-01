@@ -10,6 +10,11 @@ use serde::Deserialize;
 use std::path::PathBuf;
 
 const SUNSHINE_API: &str = "https://127.0.0.1:47990";
+
+/// Sunshine API base URL — env-overridable so tests can run a mock Sunshine.
+fn api_base() -> String {
+    std::env::var("NODEDEK_SUNSHINE_API").unwrap_or_else(|_| SUNSHINE_API.to_string())
+}
 const CREDS_KEY: &str = "sunshine-credentials"; // stored as "user:pass"
 const FIXED_USER: &str = "nodedesk";
 
@@ -285,7 +290,7 @@ pub fn clean_pin(pin: &str) -> Option<String> {
 pub async fn approve_pin(client: &reqwest::Client, pin: &str) -> Result<(), String> {
     let clean = clean_pin(pin).ok_or("PIN must be the 4 digits shown on the other computer")?;
     let resp = client
-        .post(format!("{SUNSHINE_API}/api/pin"))
+        .post(format!("{}/api/pin", api_base()))
         .header("Authorization", auth_header()?)
         .json(&serde_json::json!({ "pin": clean }))
         .send()
@@ -302,7 +307,7 @@ pub async fn approve_pin(client: &reqwest::Client, pin: &str) -> Result<(), Stri
 
 pub async fn api_reachable(client: &reqwest::Client) -> bool {
     client
-        .get(format!("{SUNSHINE_API}/api/config"))
+        .get(format!("{}/api/config", api_base()))
         .header("Authorization", auth_header().unwrap_or_default())
         .send()
         .await

@@ -20,6 +20,9 @@ mod terminal;
 mod update;
 mod wol;
 
+#[cfg(test)]
+mod sim_test;
+
 use serde::Serialize;
 use state::{AppState, Settings};
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -272,7 +275,7 @@ async fn list_computers(state: State<'_, AppState>) -> Result<Vec<ComputerDto>, 
 
 async fn fetch_metrics(client: &reqwest::Client, address: &str, code: &str) -> Option<monitor::Metrics> {
     client
-        .get(format!("http://{address}:{}/metrics", discovery::AGENT_PORT))
+        .get(format!("http://{address}:{}/metrics", discovery::agent_port()))
         .header("x-nodedesk-code", code)
         .timeout(std::time::Duration::from_millis(900))
         .send()
@@ -340,7 +343,7 @@ async fn power_action(state: State<'_, AppState>, address: String, action: Strin
         .ok_or("No access code stored for this computer — add it again with its code")?;
     state
         .http
-        .post(format!("http://{address}:{}/power", discovery::AGENT_PORT))
+        .post(format!("http://{address}:{}/power", discovery::agent_port()))
         .header("x-nodedesk-code", code)
         .json(&serde_json::json!({ "action": action }))
         .timeout(std::time::Duration::from_millis(1500))
@@ -507,7 +510,7 @@ async fn list_files(state: State<'_, AppState>, address: String, path: String) -
         .ok_or("No access code stored for this computer")?;
     let resp = state
         .http
-        .get(format!("http://{address}:{}/files/list", discovery::AGENT_PORT))
+        .get(format!("http://{address}:{}/files/list", discovery::agent_port()))
         .header("x-nodedesk-code", code)
         .query(&[("path", path)])
         .timeout(std::time::Duration::from_millis(3000))
@@ -523,13 +526,21 @@ async fn list_files(state: State<'_, AppState>, address: String, path: String) -
 #[tauri::command]
 async fn send_files(app: AppHandle, address: String, paths: Vec<String>) -> Result<(), String> {
     let state = app.state::<AppState>();
-    files::send_files(app.clone(), &state, &address, paths).await
+    let app2 = app.clone();
+    files::send_files(&state, &address, paths, &move |p| {
+        let _ = app2.emit("transfer-progress", p);
+    })
+    .await
 }
 
 #[tauri::command]
 async fn download_file(app: AppHandle, address: String, path: String) -> Result<String, String> {
     let state = app.state::<AppState>();
-    files::download_file(app.clone(), &state, &address, &path).await
+    let app2 = app.clone();
+    files::download_file(&state, &address, &path, &move |p| {
+        let _ = app2.emit("transfer-progress", p);
+    })
+    .await
 }
 
 #[tauri::command]
@@ -557,7 +568,7 @@ async fn terminal_exec(state: State<'_, AppState>, address: String, command: Str
         .ok_or("No access code stored for this computer")?;
     let resp = state
         .http
-        .post(format!("http://{address}:{}/terminal", discovery::AGENT_PORT))
+        .post(format!("http://{address}:{}/terminal", discovery::agent_port()))
         .header("x-nodedesk-code", code)
         .json(&serde_json::json!({ "command": command, "cwd": cwd }))
         .timeout(std::time::Duration::from_secs(35))
