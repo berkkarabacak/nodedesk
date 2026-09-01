@@ -5,7 +5,7 @@
 
 use axum::{
     body::Bytes,
-    extract::{Query, State},
+    extract::{DefaultBodyLimit, Query, State},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
     routing::{get, post},
@@ -220,6 +220,8 @@ pub fn router(ctx: Arc<AgentCtx>) -> Router {
         .route("/files/download", get(files_download))
         .route("/files/upload", post(files_upload))
         .route("/terminal", post(terminal_exec))
+        // Uploads arrive in chunks; the default 2 MiB body limit would break them.
+        .layer(DefaultBodyLimit::max(256 * 1024 * 1024))
         .with_state(ctx)
 }
 

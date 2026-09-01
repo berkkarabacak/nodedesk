@@ -10,7 +10,7 @@ use std::sync::atomic::Ordering;
 
 use crate::state::AppState;
 
-const CHUNK: usize = 4 * 1024 * 1024; // 4 MiB
+const CHUNK: usize = 2 * 1024 * 1024; // 2 MiB
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
