@@ -19,6 +19,12 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/berkkarabacak/nodedesk/actions/workflows/ci.yml"><img src="https://github.com/berkkarabacak/nodedesk/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
+  <a href="https://github.com/berkkarabacak/nodedesk/releases/latest"><img src="https://img.shields.io/github/v/release/berkkarabacak/nodedesk" alt="Latest release" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0-blue" alt="License" /></a>
+</p>
+
+<p align="center">
   <a href="https://berkkarabacak.github.io/nodedesk/">Website</a> ·
   <a href="docs/architecture.md">Architecture</a> ·
   <a href="docs/security.md">Security</a> ·
@@ -173,6 +179,11 @@ npm install
 npm run dev        # UI in a browser (mock backend)
 npm run tauri dev  # full desktop shell (requires Rust)
 ```
+
+Every change is checked by CI: Rust unit tests, a **simulated two-machine
+end-to-end test** (a real agent over real TCP plays the other computer —
+discovery, pairing approval, resumable file transfer, terminal), frontend
+tests, and builds on Windows, Linux and macOS.
 
 ## Contributing
 
