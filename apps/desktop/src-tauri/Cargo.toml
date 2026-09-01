@@ -1,6 +1,6 @@
 [package]
 name = "nodedesk"
-version = "1.1.0"
+version = "1.2.0"
 description = "NodeDesk — one-click remote computing built on Sunshine + Moonlight"
 authors = ["NodeDesk contributors"]
 edition = "2021"

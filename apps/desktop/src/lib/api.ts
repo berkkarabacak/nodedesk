@@ -121,6 +121,12 @@ export interface TransferProgress {
   finished: boolean
 }
 
+export interface HeadlessStatus {
+  supported: boolean
+  vddInstalled: boolean
+  displayCount: number
+}
+
 const isTauri = '__TAURI_INTERNALS__' in window
 
 async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
@@ -285,6 +291,11 @@ async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Promi
       return 'C:\\Users\\demo\\Downloads\\NodeDesk\\render-final.mp4' as T
     case 'cancel_transfer':
       return undefined as T
+    case 'headless_status':
+      return { supported: true, vddInstalled: false, displayCount: 1 } as T
+    case 'enable_headless':
+      await delay(1500)
+      return undefined as T
     case 'terminal_exec': {
       const command = String(args?.command ?? '')
       const cwd = String(args?.cwd ?? '') || 'C:\\Users\\demo'
@@ -330,4 +341,6 @@ export const api = {
   cancelTransfer: () => invoke<void>('cancel_transfer'),
   terminalExec: (address: string, command: string, cwd: string) =>
     invoke<TerminalResult>('terminal_exec', { address, command, cwd }),
+  headlessStatus: () => invoke<HeadlessStatus>('headless_status'),
+  enableHeadless: () => invoke<void>('enable_headless'),
 }

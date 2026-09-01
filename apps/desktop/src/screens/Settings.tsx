@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
-import { ArrowLeft, ChevronDown, ChevronRight, Copy, RefreshCcw } from 'lucide-react'
-import { api, type Settings } from '../lib/api'
+import { ArrowLeft, ChevronDown, ChevronRight, Copy, MonitorOff, RefreshCcw } from 'lucide-react'
+import { api, type HeadlessStatus, type Settings } from '../lib/api'
 
 function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) {
   return (
@@ -42,12 +42,32 @@ export default function SettingsScreen({
   const [advanced, setAdvanced] = useState(false)
   const [accessCode, setAccessCode] = useState('')
   const [copied, setCopied] = useState(false)
+  const [headless, setHeadless] = useState<HeadlessStatus | null>(null)
+  const [headlessBusy, setHeadlessBusy] = useState(false)
+  const [headlessMsg, setHeadlessMsg] = useState('')
 
   const isHost = s.mode === 'host' || s.mode === 'both'
 
   useEffect(() => {
-    if (isHost) void api.getAccessCode().then(setAccessCode)
+    if (isHost) {
+      void api.getAccessCode().then(setAccessCode)
+      void api.headlessStatus().then(setHeadless)
+    }
   }, [isHost])
+
+  const enableHeadless = async () => {
+    setHeadlessBusy(true)
+    setHeadlessMsg('')
+    try {
+      await api.enableHeadless()
+      setHeadless(await api.headlessStatus())
+      setHeadlessMsg('Virtual display driver installed. This computer can now be used without a monitor.')
+    } catch (e) {
+      setHeadlessMsg(String(e))
+    } finally {
+      setHeadlessBusy(false)
+    }
+  }
 
   const copyCode = () => {
     void navigator.clipboard.writeText(accessCode)
@@ -84,6 +104,29 @@ export default function SettingsScreen({
             </button>
           </div>
           {copied && <p className="mt-2 text-xs text-emerald-400">Copied</p>}
+        </div>
+      )}
+
+      {isHost && headless?.supported && (
+        <div className="mt-4 rounded-2xl border border-zinc-800 bg-zinc-900/40 p-5">
+          <p className="flex items-center gap-2 text-sm font-medium">
+            <MonitorOff className="h-4 w-4 text-emerald-400" /> Headless computer (no monitor)
+          </p>
+          <p className="mt-1 text-xs text-zinc-500">
+            {headless.vddInstalled
+              ? 'Virtual display driver installed — this machine is headless-ready.'
+              : `${headless.displayCount} display(s) detected. Install the virtual display driver to use this machine without a monitor. Windows will ask for admin consent (driver install).`}
+          </p>
+          {!headless.vddInstalled && (
+            <button
+              onClick={() => void enableHeadless()}
+              disabled={headlessBusy}
+              className="mt-3 rounded-lg bg-zinc-800 px-4 py-2 text-xs font-semibold text-zinc-200 hover:bg-zinc-700 disabled:opacity-40"
+            >
+              {headlessBusy ? 'Installing driver…' : 'Enable headless mode'}
+            </button>
+          )}
+          {headlessMsg && <p className="mt-2 text-xs text-zinc-400">{headlessMsg}</p>}
         </div>
       )}
 

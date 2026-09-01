@@ -35,17 +35,28 @@ pub fn moonlight_exe(config_dir: &PathBuf) -> Option<PathBuf> {
         }
     }
     let mut candidates: Vec<PathBuf> = vec![];
-    if let Ok(pf) = std::env::var("ProgramFiles") {
-        candidates.push(
-            PathBuf::from(pf)
-                .join("Moonlight Game Streaming")
-                .join("Moonlight.exe"),
-        );
+    #[cfg(windows)]
+    {
+        if let Ok(pf) = std::env::var("ProgramFiles") {
+            candidates.push(
+                PathBuf::from(pf)
+                    .join("Moonlight Game Streaming")
+                    .join("Moonlight.exe"),
+            );
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        candidates.push(PathBuf::from("/Applications/Moonlight.app/Contents/MacOS/Moonlight"));
+    }
+    #[cfg(target_os = "linux")]
+    {
+        candidates.push(PathBuf::from("/usr/bin/moonlight"));
     }
     candidates
         .into_iter()
         .find(|p| p.exists())
-        .or_else(|| which_in_path("moonlight.exe"))
+        .or_else(|| which_in_path(if cfg!(windows) { "moonlight.exe" } else { "moonlight" }))
 }
 
 fn find_moonlight_in(dir: &PathBuf, depth: u8) -> Option<PathBuf> {
@@ -84,7 +95,10 @@ pub async fn ensure_available(client: &reqwest::Client, config_dir: &PathBuf) ->
         return Ok(exe);
     }
     if !cfg!(windows) {
-        return Err("Automatic Moonlight download is only supported on Windows in v1.0".into());
+        return Err(
+            "Automatic Moonlight download is Windows-only for now — install Moonlight from moonlight-stream.org and NodeDesk will use it"
+                .into(),
+        );
     }
 
     let release: GithubRelease = client

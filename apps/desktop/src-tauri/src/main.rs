@@ -11,6 +11,7 @@
 mod agent;
 mod discovery;
 mod files;
+mod headless;
 mod monitor;
 mod moonlight;
 mod state;
@@ -418,6 +419,17 @@ async fn run_diagnostics(state: State<'_, AppState>) -> Result<Vec<DiagnosticsIt
             ok: tailscale_installed,
             detail: Some(if tailscale_installed { "Installed".into() } else { "Not installed (optional)".into() }),
         },
+        DiagnosticsItem {
+            label: "Virtual display".into(),
+            ok: headless::status().vdd_installed || headless::status().display_count > 0,
+            detail: Some(if headless::status().vdd_installed {
+                "Virtual display driver installed — headless ready".into()
+            } else if headless::status().display_count > 0 {
+                format!("{} display(s) attached", headless::status().display_count)
+            } else {
+                "No display detected — enable headless mode in Settings".into()
+            }),
+        },
     ])
 }
 
@@ -526,6 +538,16 @@ fn cancel_transfer(state: State<'_, AppState>) {
 }
 
 #[tauri::command]
+fn headless_status() -> headless::HeadlessStatus {
+    headless::status()
+}
+
+#[tauri::command]
+async fn enable_headless(state: State<'_, AppState>) -> Result<(), String> {
+    headless::install_vdd(&state.http).await
+}
+
+#[tauri::command]
 async fn terminal_exec(state: State<'_, AppState>, address: String, command: String, cwd: String) -> Result<terminal::TerminalResult, String> {
     let code = state
         .settings
@@ -562,8 +584,41 @@ fn set_autostart(enabled: bool) {
     }
 }
 
-#[cfg(not(windows))]
-fn set_autostart(_enabled: bool) {}
+#[cfg(target_os = "linux")]
+fn set_autostart(enabled: bool) {
+    let Some(config) = dirs::config_dir() else { return };
+    let dir = config.join("autostart");
+    let file = dir.join("nodedesk.desktop");
+    if enabled {
+        let Ok(exe) = std::env::current_exe() else { return };
+        let _ = std::fs::create_dir_all(&dir);
+        let desktop = format!(
+            "[Desktop Entry]\nType=Application\nName=NodeDesk\nExec={}\nX-GNOME-Autostart-enabled=true\n",
+            exe.to_string_lossy()
+        );
+        let _ = std::fs::write(&file, desktop);
+    } else {
+        let _ = std::fs::remove_file(&file);
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn set_autostart(enabled: bool) {
+    let Some(home) = dirs::home_dir() else { return };
+    let dir = home.join("Library/LaunchAgents");
+    let file = dir.join("dev.nodedesk.app.plist");
+    if enabled {
+        let Ok(exe) = std::env::current_exe() else { return };
+        let _ = std::fs::create_dir_all(&dir);
+        let plist = format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\"><dict>\n<key>Label</key><string>dev.nodedesk.app</string>\n<key>ProgramArguments</key><array><string>{}</string></array>\n<key>RunAtLoad</key><true/>\n</dict></plist>\n",
+            exe.to_string_lossy()
+        );
+        let _ = std::fs::write(&file, plist);
+    } else {
+        let _ = std::fs::remove_file(&file);
+    }
+}
 
 fn main() {
     tauri::Builder::default()
@@ -609,6 +664,8 @@ fn main() {
             download_file,
             cancel_transfer,
             terminal_exec,
+            headless_status,
+            enable_headless,
         ])
         .run(tauri::generate_context!())
         .expect("error while running NodeDesk");
