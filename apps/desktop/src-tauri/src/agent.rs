@@ -291,7 +291,7 @@ mod tests {
         let dir = std::env::temp_dir().join("nodedesk-agent-test");
         let path = dir.join("roundtrip.bin");
         let _ = std::fs::remove_dir_all(&dir);
-        let p = path.to_string_lossy().replace('\', "/");
+        let p = path.to_string_lossy().replace('\\', "/");
 
         let up = test_router()
             .oneshot(
