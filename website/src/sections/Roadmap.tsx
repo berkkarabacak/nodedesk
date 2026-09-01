@@ -9,12 +9,14 @@ const mvp = [
   'Clipboard sync, power actions, diagnostics',
   'File transfer with resume',
   'Remote terminal, AI service discovery',
+  'Linux host, macOS controller packages',
+  'Headless virtual displays',
 ]
 
 const next = [
-  'Linux and macOS',
-  'Headless virtual displays',
-  'Beta / nightly update channels',
+  'Beta / nightly channels',
+  'Hardware compatibility matrix',
+  'In-place auto-updates',
 ]
 
 export default function Roadmap() {
@@ -23,13 +25,13 @@ export default function Roadmap() {
       <div className="mx-auto max-w-6xl px-4 sm:px-6">
         <div className="max-w-2xl">
           <p className="text-sm font-semibold uppercase tracking-widest text-emerald-400">Roadmap</p>
-          <h2 className="mt-3 text-3xl font-bold tracking-tight sm:text-4xl">v1.1 is out. Now we go deep.</h2>
+          <h2 className="mt-3 text-3xl font-bold tracking-tight sm:text-4xl">v1.2 is out. Now we go deep.</h2>
         </div>
 
         <div className="mt-12 grid gap-6 lg:grid-cols-2">
           <div className="rounded-2xl border border-emerald-500/25 bg-emerald-500/5 p-7">
             <div className="flex items-center gap-3">
-              <span className="rounded-md bg-emerald-500/15 px-2.5 py-1 text-xs font-semibold text-emerald-300">v1.1</span>
+              <span className="rounded-md bg-emerald-500/15 px-2.5 py-1 text-xs font-semibold text-emerald-300">v1.2</span>
               <h3 className="font-semibold">Shipping now</h3>
             </div>
             <ul className="mt-5 space-y-2.5">
