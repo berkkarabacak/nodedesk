@@ -70,7 +70,7 @@ remove this caveat.*
 | Pairing | Upstream certificate exchange; approval UX simplified, cryptography unchanged | Implemented |
 | Streaming transport | Encrypted by upstream Sunshine/Moonlight | Implemented |
 | Agent transport | Signed, replay-protected, throttled; **not encrypted** | Implemented |
-| Credential storage | OS secure storage: Windows Credential Manager, macOS Keychain, libsecret on Linux — for this host's code and every remote host's code | Implemented |
+| Credential storage | OS secure storage — for this host's code and every remote host's code. Windows Credential Manager, macOS Keychain, and Secret Service (GNOME Keyring / KWallet) on Linux | Implemented |
 | Path confinement | Network-supplied paths confined to shared folders | Implemented |
 | Upstream downloads | Origin-verified against the expected GitHub repository before an installer is written or run | Implemented |
 | Diagnostic exports | Contain no credentials, keys, tokens or clipboard contents | Implemented |
@@ -94,6 +94,14 @@ remove this caveat.*
 | Malicious upstream release (correct URL, bad contents) | **Not mitigated** — upstream publishes no signatures NodeDesk can verify | *Planned* |
 | Malicious NodeDesk update | **Not mitigated** — releases are unsigned in v1.x | *Planned* |
 | Virtual display driver risk | Origin-verified download, explicit UAC consent, never silent | Partially — the driver itself is third-party and unsigned by us |
+
+### A note on Linux
+
+Secure storage on Linux is provided by a Secret Service daemon — GNOME Keyring
+or KWallet — which desktop installs normally have running. On a system without
+one (a bare server, some minimal window managers), NodeDesk will report that no
+secure credential store is available and refuse to save an access code, rather
+than falling back to writing it somewhere unprotected.
 
 ## Clipboard
 

@@ -6,6 +6,8 @@
 //! and the API credentials are machine-local secrets in OS secure storage.
 
 use base64::Engine;
+// Only the gated release structs derive it.
+#[cfg(any(windows, target_os = "linux"))]
 use serde::Deserialize;
 use std::path::PathBuf;
 

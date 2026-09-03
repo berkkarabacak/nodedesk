@@ -17,7 +17,7 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time"] }
 axum = "0.7"
 sysinfo = "0.32"
-keyring = { version = "3", features = ["windows-native"] }
+keyring = "3"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 base64 = "0.22"
 rand = "0.8"
@@ -28,6 +28,16 @@ dirs = "5"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.52"
+keyring = { version = "3", features = ["windows-native"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3", features = ["apple-native"] }
+
+# Secret Service (GNOME Keyring / KWallet) over libdbus. The sync backend is
+# deliberate: the async one blocks on a runtime internally, which would panic
+# when called from an async Tauri command.
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "3", features = ["sync-secret-service", "crypto-rust"] }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

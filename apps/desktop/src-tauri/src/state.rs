@@ -150,26 +150,88 @@ impl AppState {
 // Secrets in OS secure storage (Windows Credential Manager, Keychain, etc.)
 // ---------------------------------------------------------------------------
 
+#[cfg(not(test))]
 const SERVICE: &str = "dev.nodedesk.app";
 
+/// Tests must not read or write the developer's real credential store, and CI
+/// runners have no Secret Service daemon at all. Under `cfg(test)` secrets live
+/// in memory; everywhere else they go to the OS keychain.
+#[cfg(test)]
+mod backend {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+
+    fn store() -> &'static Mutex<HashMap<String, String>> {
+        static STORE: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
+        STORE.get_or_init(|| Mutex::new(HashMap::new()))
+    }
+
+    fn lock() -> std::sync::MutexGuard<'static, HashMap<String, String>> {
+        store().lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    pub fn set(key: &str, value: &str) -> Result<(), String> {
+        lock().insert(key.to_string(), value.to_string());
+        Ok(())
+    }
+
+    pub fn get(key: &str) -> Option<String> {
+        lock().get(key).cloned()
+    }
+
+    pub fn remove(key: &str) -> Result<(), String> {
+        lock().remove(key);
+        Ok(())
+    }
+}
+
+#[cfg(not(test))]
+mod backend {
+    use super::SERVICE;
+
+    /// Secure storage needs a platform backend (Credential Manager, Keychain,
+    /// Secret Service). Say so plainly rather than leaking a keyring error.
+    fn unavailable(e: keyring::Error) -> String {
+        match e {
+            keyring::Error::NoStorageAccess(_) | keyring::Error::PlatformFailure(_) => {
+                "no secure credential store is available on this system — on Linux,                  install and run a Secret Service provider such as GNOME Keyring"
+                    .to_string()
+            }
+            other => other.to_string(),
+        }
+    }
+
+    pub fn set(key: &str, value: &str) -> Result<(), String> {
+        let entry = keyring::Entry::new(SERVICE, key).map_err(unavailable)?;
+        entry.set_password(value).map_err(unavailable)
+    }
+
+    pub fn get(key: &str) -> Option<String> {
+        keyring::Entry::new(SERVICE, key)
+            .ok()
+            .and_then(|e| e.get_password().ok())
+    }
+
+    pub fn remove(key: &str) -> Result<(), String> {
+        let entry = keyring::Entry::new(SERVICE, key).map_err(unavailable)?;
+        match entry.delete_credential() {
+            Ok(()) => Ok(()),
+            Err(keyring::Error::NoEntry) => Ok(()),
+            Err(e) => Err(unavailable(e)),
+        }
+    }
+}
+
 pub fn store_secret(key: &str, value: &str) -> Result<(), String> {
-    let entry = keyring::Entry::new(SERVICE, key).map_err(|e| e.to_string())?;
-    entry.set_password(value).map_err(|e| e.to_string())
+    backend::set(key, value)
 }
 
 pub fn read_secret(key: &str) -> Option<String> {
-    keyring::Entry::new(SERVICE, key)
-        .ok()
-        .and_then(|e| e.get_password().ok())
+    backend::get(key)
 }
 
 pub fn delete_secret(key: &str) -> Result<(), String> {
-    let entry = keyring::Entry::new(SERVICE, key).map_err(|e| e.to_string())?;
-    match entry.delete_credential() {
-        Ok(()) => Ok(()),
-        Err(keyring::Error::NoEntry) => Ok(()),
-        Err(e) => Err(e.to_string()),
-    }
+    backend::remove(key)
 }
 
 fn host_code_key(address: &str) -> String {
@@ -284,6 +346,21 @@ mod tests {
         let a = random_code(ACCESS_CODE_LEN);
         let b = random_code(ACCESS_CODE_LEN);
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn host_codes_round_trip_through_secure_storage() {
+        let address = "10.9.9.9";
+        assert!(host_code(address).is_none());
+        store_host_code(address, "CODE-FOR-HOST").unwrap();
+        assert_eq!(host_code(address).unwrap(), "CODE-FOR-HOST");
+        forget_host_code(address).unwrap();
+        assert!(host_code(address).is_none(), "forgetting must delete the code");
+    }
+
+    #[test]
+    fn forgetting_an_unknown_host_is_not_an_error() {
+        assert!(forget_host_code("10.9.9.254").is_ok());
     }
 
     #[test]
