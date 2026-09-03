@@ -7,7 +7,7 @@
 
 use base64::Engine;
 use serde::Deserialize;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 const SUNSHINE_API: &str = "https://127.0.0.1:47990";
 
@@ -111,18 +111,21 @@ pub fn start_service() -> Result<(), String> {
     Err("Sunshine is not installed".into())
 }
 
+#[cfg(any(windows, target_os = "linux"))]
 #[derive(Deserialize)]
 struct GithubRelease {
     tag_name: String,
     assets: Vec<GithubAsset>,
 }
 
+#[cfg(any(windows, target_os = "linux"))]
 #[derive(Deserialize)]
 struct GithubAsset {
     name: String,
     browser_download_url: String,
 }
 
+#[cfg(any(windows, target_os = "linux"))]
 async fn latest_release(client: &reqwest::Client) -> Result<GithubRelease, String> {
     client
         .get("https://api.github.com/repos/LizardByte/Sunshine/releases/latest")
@@ -134,7 +137,12 @@ async fn latest_release(client: &reqwest::Client) -> Result<GithubRelease, Strin
         .map_err(|e| format!("cannot parse Sunshine release info: {e}"))
 }
 
-async fn download_asset(client: &reqwest::Client, url: &str, dest: &Path) -> Result<(), String> {
+#[cfg(any(windows, target_os = "linux"))]
+async fn download_asset(
+    client: &reqwest::Client,
+    url: &str,
+    dest: &std::path::Path,
+) -> Result<(), String> {
     // This file gets executed with installer privileges; make sure it is
     // really an upstream Sunshine asset before it lands on disk.
     crate::release::verify_asset_url(url, "LizardByte", "Sunshine")?;
@@ -248,6 +256,7 @@ pub async fn ensure_installed(client: &reqwest::Client) -> Result<String, String
 
     #[cfg(target_os = "macos")]
     {
+        let _ = client; // controller-only: nothing to download
         Err("macOS is controller-only for now — no Sunshine host install".into())
     }
 }
