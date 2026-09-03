@@ -25,6 +25,11 @@ pub fn verify_asset_url(url: &str, owner: &str, repo: &str) -> Result<(), String
 ///
 /// The name is attacker-influenced input used to build a local path; a value
 /// containing separators or `..` would write outside the intended folder.
+///
+/// Only the Windows virtual-display installer currently derives a local path
+/// from a remote name, so on other platforms this has no call site — but the
+/// rule belongs with the other release guards, and its tests run everywhere.
+#[cfg_attr(not(windows), allow(dead_code))]
 pub fn safe_asset_name(name: &str) -> Result<&str, String> {
     let bad = name.is_empty()
         || name.contains('/')
