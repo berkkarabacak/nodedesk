@@ -1,5 +1,5 @@
 //! Update checking against GitHub releases. v1 notifies and links to the
-/// signed installer; in-place auto-update ships in a later release.
+//! release page; in-place auto-update ships in a later release.
 
 use serde::{Deserialize, Serialize};
 

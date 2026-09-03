@@ -3,7 +3,7 @@
 use std::net::UdpSocket;
 
 pub fn parse_mac(mac: &str) -> Option<[u8; 6]> {
-    let parts: Vec<&str> = mac.split(|c| c == ':' || c == '-').collect();
+    let parts: Vec<&str> = mac.split([':', '-']).collect();
     if parts.len() != 6 {
         return None;
     }

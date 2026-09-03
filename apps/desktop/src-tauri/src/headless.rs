@@ -109,7 +109,15 @@ pub async fn install_vdd(client: &reqwest::Client) -> Result<(), String> {
         .find(|a| a.name.to_lowercase().ends_with(".zip"));
 
     if let Some(asset) = exe_asset {
-        let installer = std::env::temp_dir().join(&asset.name);
+        // This installer is run elevated and loads a kernel-mode driver.
+        // Verify its origin, and never let a remote name shape the path.
+        crate::release::verify_asset_url(
+            &asset.browser_download_url,
+            "itsmikethetech",
+            "Virtual-Display-Driver",
+        )?;
+        let name = crate::release::safe_asset_name(&asset.name)?;
+        let installer = std::env::temp_dir().join(name);
         let bytes = client
             .get(&asset.browser_download_url)
             .send()

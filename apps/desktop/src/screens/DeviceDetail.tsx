@@ -14,6 +14,7 @@ import {
   Power,
   RefreshCcw,
   Square,
+  Trash2,
   UploadCloud,
   X,
 } from 'lucide-react'
@@ -293,6 +294,21 @@ export default function DeviceDetail({ computer, onBack }: { computer: Computer;
     }
   }
 
+  const forget = async () => {
+    if (!window.confirm(
+      `Forget ${computer.name}? Its access code is deleted from this computer. ` +
+        'To reconnect later you will need the code again.',
+    )) {
+      return
+    }
+    try {
+      await api.forgetHost(computer.address)
+      onBack()
+    } catch (e) {
+      notify(String(e), true)
+    }
+  }
+
   const runningServices = (computer.services ?? []).filter((s) => s.running)
 
   return (
@@ -329,6 +345,13 @@ export default function DeviceDetail({ computer, onBack }: { computer: Computer;
               <b.icon className="h-4 w-4" />
             </button>
           ))}
+          <button
+            title="Forget this computer"
+            onClick={() => void forget()}
+            className="rounded-lg border border-zinc-800 p-2.5 text-zinc-400 transition-colors hover:border-red-500/50 hover:text-red-300"
+          >
+            <Trash2 className="h-4 w-4" />
+          </button>
         </div>
       </div>
 

@@ -20,7 +20,7 @@ Network scan
 Found:  Office-PC   AI-PC   Laptop   Server
 ```
 
-- **LAN:** mDNS-based announcements from each NodeDesk host; passive listening
+- **LAN:** UDP broadcast (mDNS planned)-based announcements from each NodeDesk host; passive listening
   plus active scan on demand.
 - **Tailnet:** Tailscale local API enumerates peers running NodeDesk.
 - Each discovered computer shows name, OS, online status and — once paired —

@@ -45,7 +45,6 @@ export interface Settings {
   hdr: boolean
   onboarded?: boolean
   manualHosts?: ManualHost[]
-  hostCodes?: Record<string, string>
 }
 
 export const defaultSettings: Settings = {
@@ -228,6 +227,12 @@ async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Promi
       return structuredClone(mockComputers) as T
     case 'add_manual_host':
       return 'Demo-Host' as T
+    case 'forget_host': {
+      const address = args?.address as string
+      const index = mockComputers.findIndex((c) => c.address === address)
+      if (index >= 0) mockComputers.splice(index, 1)
+      return undefined as T
+    }
     case 'pair_computer':
       setTimeout(() => mockEmit('pair-pin', '1234'), 900)
       await delay(3000)
@@ -320,6 +325,7 @@ export const api = {
   bootstrapHost: () => invoke<void>('bootstrap_host'),
   listComputers: () => invoke<Computer[]>('list_computers'),
   addManualHost: (address: string, code: string) => invoke<string>('add_manual_host', { address, code }),
+  forgetHost: (address: string) => invoke<void>('forget_host', { address }),
   approvePairing: (pin: string) => invoke<void>('approve_pairing', { pin }),
   pairComputer: (address: string) => invoke<void>('pair_computer', { address }),
   connect: (address: string) => invoke<void>('connect_computer', { address }),
