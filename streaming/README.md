@@ -1,5 +1,8 @@
 # streaming/
 
+> **Design notes, not code.** The working implementation lives in
+> `apps/desktop/src-tauri/src/` - see the repository layout in the README.
+
 NodeDesk's streaming integration layers. We wrap upstream — we don't rewrite it.
 
 ## `sunshine/`

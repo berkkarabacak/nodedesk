@@ -1,5 +1,8 @@
 # monitoring/
 
+> **Design notes, not code.** The working implementation lives in
+> `apps/desktop/src-tauri/src/` - see the repository layout in the README.
+
 Hardware inventory and live metrics for the dashboard.
 
 ## Responsibilities

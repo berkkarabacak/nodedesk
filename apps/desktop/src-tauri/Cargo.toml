@@ -21,6 +21,8 @@ keyring = { version = "3", features = ["windows-native"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 base64 = "0.22"
 rand = "0.8"
+hmac = "0.12"
+sha2 = "0.10"
 mac_address = "1"
 dirs = "5"
 

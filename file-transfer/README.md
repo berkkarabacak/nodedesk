@@ -1,5 +1,10 @@
 # file-transfer/
 
+> **Design notes, not code.** The working implementation lives in
+> `apps/desktop/src-tauri/src/` - see the repository layout in the README.
+> This subsystem is implemented in `files.rs`. Transfers are authenticated
+> and path-confined, but the channel is not encrypted - see docs/security.md.
+
 Move files between your computers without installing anything else.
 
 ## Responsibilities

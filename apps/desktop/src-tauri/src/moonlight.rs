@@ -6,7 +6,7 @@
 
 use serde::Deserialize;
 use std::io::{BufRead, BufReader};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use tauri::{AppHandle, Emitter};
 
@@ -27,7 +27,7 @@ struct GithubAsset {
 
 /// Locates a Moonlight executable: previously downloaded portable copy,
 /// a system install, or PATH.
-pub fn moonlight_exe(config_dir: &PathBuf) -> Option<PathBuf> {
+pub fn moonlight_exe(config_dir: &Path) -> Option<PathBuf> {
     let portable_root = config_dir.join("moonlight");
     if portable_root.exists() {
         if let Some(found) = find_moonlight_in(&portable_root, 3) {
@@ -59,7 +59,7 @@ pub fn moonlight_exe(config_dir: &PathBuf) -> Option<PathBuf> {
         .or_else(|| which_in_path(if cfg!(windows) { "moonlight.exe" } else { "moonlight" }))
 }
 
-fn find_moonlight_in(dir: &PathBuf, depth: u8) -> Option<PathBuf> {
+fn find_moonlight_in(dir: &Path, depth: u8) -> Option<PathBuf> {
     if depth == 0 {
         return None;
     }
@@ -73,7 +73,7 @@ fn find_moonlight_in(dir: &PathBuf, depth: u8) -> Option<PathBuf> {
             return Some(path);
         }
     }
-    dirs.iter().find_map(|d| find_moonlight_in(d, depth - 1))
+    dirs.iter().find_map(|d| find_moonlight_in(d.as_path(), depth - 1))
 }
 
 fn which_in_path(name: &str) -> Option<PathBuf> {
@@ -90,7 +90,7 @@ fn which_in_path(name: &str) -> Option<PathBuf> {
 
 /// Downloads the Moonlight-Qt portable build and extracts it under the
 /// NodeDesk config directory. No installer, no system changes.
-pub async fn ensure_available(client: &reqwest::Client, config_dir: &PathBuf) -> Result<PathBuf, String> {
+pub async fn ensure_available(client: &reqwest::Client, config_dir: &Path) -> Result<PathBuf, String> {
     if let Some(exe) = moonlight_exe(config_dir) {
         return Ok(exe);
     }
@@ -119,6 +119,11 @@ pub async fn ensure_available(client: &reqwest::Client, config_dir: &PathBuf) ->
         })
         .ok_or("no portable Windows build found in the latest Moonlight release")?;
 
+    crate::release::verify_asset_url(
+        &asset.browser_download_url,
+        "moonlight-stream",
+        "moonlight-qt",
+    )?;
     let bytes = client
         .get(&asset.browser_download_url)
         .send()

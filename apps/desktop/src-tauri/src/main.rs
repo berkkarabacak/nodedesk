@@ -9,11 +9,15 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod agent;
+mod auth;
+mod client;
 mod discovery;
 mod files;
 mod headless;
 mod monitor;
 mod moonlight;
+mod release;
+mod safepath;
 mod state;
 mod sunshine;
 mod terminal;
@@ -31,7 +35,7 @@ const ACCESS_CODE_KEY: &str = "host-access-code";
 
 fn ensure_access_code() -> String {
     state::read_secret(ACCESS_CODE_KEY).unwrap_or_else(|| {
-        let code = state::random_code(8);
+        let code = state::random_code(state::ACCESS_CODE_LEN);
         let _ = state::store_secret(ACCESS_CODE_KEY, &code);
         code
     })
@@ -232,7 +236,7 @@ async fn list_computers(state: State<'_, AppState>) -> Result<Vec<ComputerDto>, 
     // 4) Probe agents; metrics require the stored access code.
     let mut out: Vec<ComputerDto> = vec![];
     for host in candidates {
-        let code = settings.host_codes.get(&host.address).cloned();
+        let code = state::code_for_host(&state, &host.address);
         let metrics = match &code {
             Some(code) => fetch_metrics(&state.http, &host.address, code).await,
             None => None,
@@ -274,11 +278,9 @@ async fn list_computers(state: State<'_, AppState>) -> Result<Vec<ComputerDto>, 
 }
 
 async fn fetch_metrics(client: &reqwest::Client, address: &str, code: &str) -> Option<monitor::Metrics> {
-    client
-        .get(format!("http://{address}:{}/metrics", discovery::agent_port()))
-        .header("x-nodedesk-code", code)
-        .timeout(std::time::Duration::from_millis(900))
-        .send()
+    client::AgentRequest::get(address, discovery::agent_port(), "/metrics")
+        .timeout(std::time::Duration::from_millis(1500))
+        .send_ok(client, code)
         .await
         .ok()?
         .json()
@@ -291,8 +293,8 @@ async fn add_manual_host(state: State<'_, AppState>, address: String, code: Stri
     let metrics = fetch_metrics(&state.http, &address, &code)
         .await
         .ok_or("Can't reach a NodeDesk host at that address — check the address and access code")?;
+    state::store_host_code(&address, &code)?;
     let mut settings = state.settings.write().map_err(|e| e.to_string())?;
-    settings.host_codes.insert(address.clone(), code);
     if !settings.manual_hosts.iter().any(|h| h.address == address) {
         settings.manual_hosts.push(state::ManualHost {
             name: metrics.host_name.clone(),
@@ -303,6 +305,20 @@ async fn add_manual_host(state: State<'_, AppState>, address: String, code: Stri
     drop(settings);
     state.save_settings();
     Ok(metrics.host_name)
+}
+
+/// Forgets a computer: deletes its stored access code and removes it from the
+/// saved list. Without this there is no way to revoke a code once shared.
+#[tauri::command]
+fn forget_host(state: State<'_, AppState>, address: String) -> Result<(), String> {
+    state::forget_host_code(&address)?;
+    {
+        let mut settings = state.settings.write().map_err(|e| e.to_string())?;
+        settings.manual_hosts.retain(|h| h.address != address);
+        settings.legacy_host_codes.remove(&address);
+    }
+    state.save_settings();
+    Ok(())
 }
 
 #[tauri::command]
@@ -335,21 +351,15 @@ fn disconnect_computer(state: State<'_, AppState>) -> Result<(), String> {
 
 #[tauri::command]
 async fn power_action(state: State<'_, AppState>, address: String, action: String) -> Result<(), String> {
-    let code = state
-        .settings
-        .read()
-        .ok()
-        .and_then(|s| s.host_codes.get(&address).cloned())
+    let code = state::code_for_host(&state, &address)
         .ok_or("No access code stored for this computer — add it again with its code")?;
-    state
-        .http
-        .post(format!("http://{address}:{}/power", discovery::agent_port()))
-        .header("x-nodedesk-code", code)
-        .json(&serde_json::json!({ "action": action }))
-        .timeout(std::time::Duration::from_millis(1500))
-        .send()
-        .await
-        .map_err(|e| format!("can't reach {address}: {e}"))?;
+    // `send_ok` fails on a rejected request, so the UI cannot report a
+    // shutdown the host actually refused.
+    client::AgentRequest::post(&address, discovery::agent_port(), "/power")
+        .json(&serde_json::json!({ "action": action }))?
+        .timeout(std::time::Duration::from_millis(2500))
+        .send_ok(&state.http, &code)
+        .await?;
     Ok(())
 }
 
@@ -381,6 +391,8 @@ async fn run_diagnostics(state: State<'_, AppState>) -> Result<Vec<DiagnosticsIt
         .map(|o| o.status.success())
         .unwrap_or(false);
     let moonlight_ok = moonlight::moonlight_exe(&state.config_dir).is_some();
+    // Each call shells out to pnputil and PowerShell; gather it once.
+    let headless = headless::status();
 
     Ok(vec![
         DiagnosticsItem {
@@ -424,11 +436,11 @@ async fn run_diagnostics(state: State<'_, AppState>) -> Result<Vec<DiagnosticsIt
         },
         DiagnosticsItem {
             label: "Virtual display".into(),
-            ok: headless::status().vdd_installed || headless::status().display_count > 0,
-            detail: Some(if headless::status().vdd_installed {
+            ok: headless.vdd_installed || headless.display_count > 0,
+            detail: Some(if headless.vdd_installed {
                 "Virtual display driver installed — headless ready".into()
-            } else if headless::status().display_count > 0 {
-                format!("{} display(s) attached", headless::status().display_count)
+            } else if headless.display_count > 0 {
+                format!("{} display(s) attached", headless.display_count)
             } else {
                 "No display detected — enable headless mode in Settings".into()
             }),
@@ -486,8 +498,11 @@ fn get_access_code() -> String {
 
 #[tauri::command]
 fn regenerate_access_code() -> Result<String, String> {
-    let code = state::random_code(8);
+    let code = state::random_code(state::ACCESS_CODE_LEN);
     state::store_secret(ACCESS_CODE_KEY, &code)?;
+    // Rotate the running listener too. A code that keeps working until the
+    // next restart has not actually been revoked.
+    agent::rotate_access_code(&code);
     Ok(code)
 }
 
@@ -502,25 +517,16 @@ async fn check_update(state: State<'_, AppState>) -> Result<update::UpdateInfo, 
 
 #[tauri::command]
 async fn list_files(state: State<'_, AppState>, address: String, path: String) -> Result<Vec<files::FileEntry>, String> {
-    let code = state
-        .settings
-        .read()
-        .ok()
-        .and_then(|s| s.host_codes.get(&address).cloned())
+    let code = state::code_for_host(&state, &address)
         .ok_or("No access code stored for this computer")?;
-    let resp = state
-        .http
-        .get(format!("http://{address}:{}/files/list", discovery::agent_port()))
-        .header("x-nodedesk-code", code)
-        .query(&[("path", path)])
+    client::AgentRequest::get(&address, discovery::agent_port(), "/files/list")
+        .query(vec![("path", path)])
         .timeout(std::time::Duration::from_millis(3000))
-        .send()
+        .send_ok(&state.http, &code)
+        .await?
+        .json::<Vec<files::FileEntry>>()
         .await
-        .map_err(|e| format!("can't reach the host: {e}"))?;
-    if !resp.status().is_success() {
-        return Err(format!("host returned HTTP {}", resp.status()));
-    }
-    resp.json::<Vec<files::FileEntry>>().await.map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -560,25 +566,16 @@ async fn enable_headless(state: State<'_, AppState>) -> Result<(), String> {
 
 #[tauri::command]
 async fn terminal_exec(state: State<'_, AppState>, address: String, command: String, cwd: String) -> Result<terminal::TerminalResult, String> {
-    let code = state
-        .settings
-        .read()
-        .ok()
-        .and_then(|s| s.host_codes.get(&address).cloned())
+    let code = state::code_for_host(&state, &address)
         .ok_or("No access code stored for this computer")?;
-    let resp = state
-        .http
-        .post(format!("http://{address}:{}/terminal", discovery::agent_port()))
-        .header("x-nodedesk-code", code)
-        .json(&serde_json::json!({ "command": command, "cwd": cwd }))
+    client::AgentRequest::post(&address, discovery::agent_port(), "/terminal")
+        .json(&serde_json::json!({ "command": command, "cwd": cwd }))?
         .timeout(std::time::Duration::from_secs(35))
-        .send()
+        .send_ok(&state.http, &code)
+        .await?
+        .json::<terminal::TerminalResult>()
         .await
-        .map_err(|e| format!("can't reach the host: {e}"))?;
-    if !resp.status().is_success() {
-        return Err(format!("host returned HTTP {}", resp.status()));
-    }
-    resp.json::<terminal::TerminalResult>().await.map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())
 }
 
 #[cfg(windows)]
@@ -656,6 +653,7 @@ fn main() {
             bootstrap_host,
             list_computers,
             add_manual_host,
+            forget_host,
             approve_pairing,
             pair_computer,
             connect_computer,

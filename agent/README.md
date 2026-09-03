@@ -1,5 +1,10 @@
 # agent/
 
+> **Design notes, not code.** The working implementation lives in
+> `apps/desktop/src-tauri/src/` - see the repository layout in the README.
+> This subsystem is implemented in `agent.rs`. Terminal access is a plain
+> agent shell, not an SSH bridge.
+
 The **NodeDesk host agent**: a small, privileged, per-machine service that does
 what the unprivileged UI cannot.
 
