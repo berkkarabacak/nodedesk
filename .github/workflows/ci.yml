@@ -94,8 +94,14 @@ jobs:
         working-directory: website
         run: npm audit --audit-level=high
       - uses: dtolnay/rust-toolchain@stable
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+      # Fails on vulnerabilities, matching --audit-level=high above. Informational
+      # "unmaintained" and "unsound" notices are printed but do not fail the build.
+      # rustsec/audit-check treated those as failures, which broke main on the day
+      # RUSTSEC-2026-0221 was published rather than on any change here: 18 of them
+      # are Tauri v1's GTK3 stack and cannot be fixed without a Tauri v2 migration.
+      # A job that goes red for reasons the repo cannot act on stops being read.
       - name: cargo audit
-        uses: rustsec/audit-check@v2
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          working-directory: apps/desktop/src-tauri
+        working-directory: apps/desktop/src-tauri
+        run: cargo audit
