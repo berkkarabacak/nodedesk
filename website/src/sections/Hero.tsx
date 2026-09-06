@@ -93,7 +93,7 @@ export default function Hero() {
           </p>
           <div className="mt-8 flex flex-wrap items-center gap-3">
             <a
-              href="https://github.com/berkkarabacak/nodedesk/releases"
+              href="https://github.com/berkkarabacak/nodedesk/releases/latest"
               target="_blank"
               rel="noreferrer"
               className="flex items-center gap-2 rounded-xl bg-emerald-500 px-5 py-3 text-sm font-semibold text-zinc-950 shadow-lg shadow-emerald-500/20 transition-all hover:bg-emerald-400"
