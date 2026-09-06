@@ -1,5 +1,10 @@
 # discovery/
 
+> **Design notes, not code.** The working implementation lives in
+> `apps/desktop/src-tauri/src/` - see the repository layout in the README.
+> This subsystem is implemented in `discovery.rs`, which uses a UDP
+> broadcast beacon on port 47800 rather than mDNS.
+
 Finds your computers so you never type an IP address.
 
 ## Responsibilities

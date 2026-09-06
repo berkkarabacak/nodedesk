@@ -1,5 +1,8 @@
 # networking/
 
+> **Design notes, not code.** The working implementation lives in
+> `apps/desktop/src-tauri/src/` - see the repository layout in the README.
+
 Connection policy and transport selection for NodeDesk.
 
 ## Responsibilities

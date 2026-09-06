@@ -28,10 +28,22 @@ jobs:
       - run: npm run build
 
   desktop-core:
-    name: Desktop core (cargo check · clippy · test)
-    runs-on: windows-latest
+    name: Desktop core (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-24.04, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev libsoup-3.0-dev libdbus-1-dev \
+            build-essential curl wget file libxdo-dev libssl-dev \
+            libayatana-appindicator3-dev librsvg2-dev patchelf
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
@@ -40,10 +52,12 @@ jobs:
           workspaces: apps/desktop/src-tauri
       - name: cargo check
         working-directory: apps/desktop/src-tauri
-        run: cargo check
+        run: cargo check --all-targets
       - name: cargo clippy
         working-directory: apps/desktop/src-tauri
-        run: cargo clippy
+        # Warnings are errors: a lint that never fails the build is a lint
+        # nobody fixes.
+        run: cargo clippy --all-targets -- -D warnings
       - name: cargo test
         working-directory: apps/desktop/src-tauri
         run: cargo test
@@ -69,11 +83,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      # These fail the build. An audit job that cannot fail reports nothing.
       - name: npm audit (desktop)
         working-directory: apps/desktop
         run: npm audit --audit-level=high
-        continue-on-error: true # report-only until the tree is curated
       - name: npm audit (website)
         working-directory: website
         run: npm audit --audit-level=high
-        continue-on-error: true
+      - uses: dtolnay/rust-toolchain@stable
+      - name: cargo audit
+        uses: rustsec/audit-check@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          working-directory: apps/desktop/src-tauri

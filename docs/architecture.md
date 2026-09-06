@@ -73,13 +73,13 @@ GPU/native API access, and security all argue against Electron.
 | Path | Responsibility |
 |---|---|
 | `apps/desktop/` | Desktop application shell (Tauri) and all user-facing UI |
-| `agent/` | Privileged per-machine agent: power actions, secure terminal, virtual display management, host service supervision |
-| `streaming/sunshine/` | Sunshine lifecycle: install detection, configuration, health, upgrades |
-| `streaming/moonlight/` | Moonlight client integration: session launch, input, reconnect |
-| `networking/` | Connection policy: LAN-first, Tailscale detection, NAT/firewall handling, reconnect strategy |
-| `discovery/` | Computer discovery on LAN (mDNS) and tailnet (Tailscale local API) |
-| `monitoring/` | Hardware inventory + live CPU/RAM/GPU/VRAM, AI service detection |
-| `file-transfer/` | Authenticated, encrypted, resumable file transfer (independent of video stream) |
+| `agent.rs` | Per-machine agent: power actions, remote terminal, file transfer, metrics. Every request signed - see docs/security.md |
+| `sunshine.rs` | Sunshine lifecycle: install detection, configuration, health, upgrades |
+| `moonlight.rs` | Moonlight client integration: session launch, input, reconnect |
+| `networking/` (design notes) | Connection policy: LAN-first, Tailscale detection, NAT/firewall handling, reconnect strategy |
+| `discovery.rs` | Computer discovery on LAN (UDP broadcast beacon on port 47800) and tailnet (`tailscale status --json`). mDNS is planned; broadcast does not cross subnets |
+| `monitor.rs` | Hardware inventory + live CPU/RAM/GPU/VRAM (NVIDIA via nvidia-smi), AI service detection |
+| `files.rs` | Authenticated, resumable, path-confined file transfer (independent of video stream). Not encrypted - see docs/security.md |
 | `installer/` | Per-platform packaging and first-run machine configuration |
 
 ## UX principle

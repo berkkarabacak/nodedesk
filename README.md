@@ -50,8 +50,9 @@ streaming stack into a product anyone can use:
 - **AI-workstation aware**: GPU/VRAM monitoring, headless virtual displays,
   and (post-MVP) discovery of local services like Ollama, Open WebUI and
   ComfyUI.
-- **Secure by default**: authenticated pairing, encrypted sessions, OS secure
-  credential storage, no silent public-internet exposure.
+- **Secure by default**: authenticated pairing, encrypted streaming sessions,
+  signed and replay-protected agent requests, OS secure credential storage, no
+  silent public-internet exposure.
 
 You will never need to know what a codec, port, pairing PIN, firewall rule or
 virtual display is — unless you open **Advanced Settings** on purpose.
@@ -115,14 +116,22 @@ integration for reaching your machines anywhere. Details in
 ## Security
 
 - Authenticated pairing and certificate verification on every connection
-- Encrypted streaming, file transfer and clipboard channels
-- Device identity stored in OS-provided secure storage
-- One-click revocation of trusted computers
+- Encrypted streaming and clipboard channels (upstream Sunshine/Moonlight)
+- NodeDesk's own agent channel - metrics, power, files, terminal - authenticates
+  every request with an HMAC signature: the access code is never sent over the
+  network, replays are rejected, and repeated failures lock the peer out
+- File access from the network is confined to your own folders
+- Access codes for this machine *and* every remote machine are stored in
+  OS-provided secure storage, never in a config file
+- Forget a computer to delete its code; regenerate yours to invalidate it
+  everywhere, immediately
 - Diagnostic exports redact all secrets
 - Sunshine is **never** silently exposed to the public internet
 
-Read the full model in [docs/security.md](docs/security.md). To report a
-vulnerability, see [SECURITY.md](SECURITY.md).
+The agent channel is authenticated and tamper-evident but **not encrypted** -
+use Tailscale when the network itself is untrusted. The full model, including
+what is *not* yet mitigated, is in [docs/security.md](docs/security.md). To
+report a vulnerability, see [SECURITY.md](SECURITY.md).
 
 ## Roadmap
 
@@ -155,19 +164,33 @@ If the answer is no, we keep simplifying.
 
 ## Repository layout
 
+All implementation currently lives under `apps/desktop/`:
+
 ```text
-apps/desktop/     Tauri + React desktop application (host + controller UI)
-agent/            Privileged host agent (power actions, terminal, headless displays)
-streaming/        Sunshine host integration & Moonlight client integration
-networking/       Connection management, reconnection, Tailscale integration
-discovery/        LAN + tailnet computer discovery
-monitoring/       CPU/RAM/GPU/VRAM metrics, service detection
-file-transfer/    Authenticated, resumable file transfer
-installer/        Windows (NSIS via Tauri), Linux, macOS packaging
-website/          Project website (GitHub Pages)
-docs/             Architecture, security, networking, upstream, development
-docs/adr/         Architecture decision records
+apps/desktop/src/            React UI (dashboard, device detail, settings)
+apps/desktop/src-tauri/src/  Rust core:
+  agent.rs                     host agent HTTP service (authenticated)
+  auth.rs                      request signing, replay + brute-force defence
+  client.rs                    signed client for talking to another host
+  safepath.rs                  path confinement for network file requests
+  files.rs                     resumable file transfer
+  terminal.rs                  remote command execution
+  discovery.rs                 LAN broadcast + tailnet discovery
+  monitor.rs                   CPU/RAM/GPU/VRAM metrics, AI service detection
+  sunshine.rs / moonlight.rs   upstream host and client integration
+  headless.rs                  virtual display driver management
+  release.rs                   upstream download origin checks
+  state.rs                     settings file + OS secure storage
+installer/                   Per-platform packaging notes
+website/                     Project website (GitHub Pages)
+docs/                        Architecture, security, networking, upstream, development
+docs/adr/                    Architecture decision records
 ```
+
+The top-level `agent/`, `streaming/`, `networking/`, `discovery/`,
+`monitoring/` and `file-transfer/` directories hold **design notes** for those
+subsystems, not code. They document intent and open questions; the working
+implementation is the Rust modules listed above.
 
 ## Development
 
@@ -180,10 +203,12 @@ npm run dev        # UI in a browser (mock backend)
 npm run tauri dev  # full desktop shell (requires Rust)
 ```
 
-Every change is checked by CI: Rust unit tests, a **simulated two-machine
-end-to-end test** (a real agent over real TCP plays the other computer —
-discovery, pairing approval, resumable file transfer, terminal), frontend
-tests, and builds on Windows, Linux and macOS.
+Every change is checked by CI: Rust unit tests and clippy (warnings are errors)
+on Windows, Linux and macOS, a **simulated two-machine end-to-end test** (a real
+agent over real TCP plays the other computer - discovery, signed requests,
+replay rejection, pairing approval, resumable file transfer, terminal), frontend
+unit and component tests, and a dependency audit. Installer bundles for all
+three platforms are built on tagged releases.
 
 ## Contributing
 

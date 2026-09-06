@@ -11,14 +11,14 @@ const MAGIC: &[u8] = b"NODEDESK_DISCOVER_V1";
 
 /// Ports are env-overridable so tests can run simulated machines side by side.
 pub fn discovery_port() -> u16 {
-    std::env::var("NODEDEK_DISCOVERY_PORT")
+    std::env::var("NODEDESK_DISCOVERY_PORT")
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(DISCOVERY_PORT)
 }
 
 pub fn agent_port() -> u16 {
-    std::env::var("NODEDEK_AGENT_PORT")
+    std::env::var("NODEDESK_AGENT_PORT")
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(AGENT_PORT)
