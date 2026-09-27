@@ -78,7 +78,9 @@ impl IntoResponse for Denied {
         match self {
             // 429 tells an honest client to back off; it tells a guesser
             // nothing about whether the code was close.
-            Denied::Throttled => (StatusCode::TOO_MANY_REQUESTS, "too many attempts").into_response(),
+            Denied::Throttled => {
+                (StatusCode::TOO_MANY_REQUESTS, "too many attempts").into_response()
+            }
             Denied::Unauthorized => StatusCode::UNAUTHORIZED.into_response(),
         }
     }
@@ -122,7 +124,10 @@ fn authorize(
     let Some(code) = ctx.code() else {
         return Err(fail(ctx));
     };
-    let path_and_query = uri.path_and_query().map(|p| p.as_str()).unwrap_or(uri.path());
+    let path_and_query = uri
+        .path_and_query()
+        .map(|p| p.as_str())
+        .unwrap_or(uri.path());
     let expected = auth::signature(
         &code,
         method.as_str(),
@@ -202,13 +207,16 @@ async fn power(
 #[cfg(windows)]
 fn run_power_action(action: &str) -> Result<(), String> {
     let (cmd, args): (&str, Vec<&str>) = match action {
-        "sleep" => ("rundll32", vec!["powrprof.dll,SetSuspendState", "0", "1", "0"]),
+        "sleep" => (
+            "rundll32",
+            vec!["powrprof.dll,SetSuspendState", "0", "1", "0"],
+        ),
         "restart" => ("shutdown", vec!["/r", "/t", "3"]),
         "shutdown" => ("shutdown", vec!["/s", "/t", "3"]),
         "lock" => ("rundll32", vec!["user32.dll,LockWorkStation"]),
         _ => return Err("unknown power action".into()),
     };
-    std::process::Command::new(cmd)
+    crate::procutil::hidden_command(cmd)
         .args(&args)
         .spawn()
         .map_err(|e| e.to_string())?;
@@ -224,7 +232,7 @@ fn run_power_action(action: &str) -> Result<(), String> {
         "lock" => ("loginctl", vec!["lock-session"]),
         _ => return Err("unknown power action".into()),
     };
-    std::process::Command::new(cmd)
+    crate::procutil::hidden_command(cmd)
         .args(&args)
         .spawn()
         .map_err(|e| e.to_string())?;
@@ -240,7 +248,7 @@ fn run_power_action(action: &str) -> Result<(), String> {
         "lock" => ("pmset", vec!["displaysleepnow"]),
         _ => return Err("unknown power action".into()),
     };
-    std::process::Command::new(cmd)
+    crate::procutil::hidden_command(cmd)
         .args(&args)
         .spawn()
         .map_err(|e| e.to_string())?;
@@ -388,25 +396,40 @@ pub fn router(ctx: Arc<AgentCtx>) -> Router {
         .with_state(ctx)
 }
 
+fn bind_failure(err: std::io::Error) -> String {
+    if err.kind() == std::io::ErrorKind::AddrInUse {
+        "Another copy of NodeDesk is already running, so this window cannot accept connections. Close the other window and use one copy.".into()
+    } else {
+        format!("This computer could not start accepting connections ({err}).")
+    }
+}
+
 /// Starts the agent on the configured port. Runs for the app's lifetime.
-pub async fn run(access_code: String) {
+///
+/// A failure is returned so the shell can show one in-app error. The previous
+/// behavior swallowed the bind error, and a second window looked like a
+/// broken host with no explanation.
+pub async fn run(access_code: String) -> Result<(), String> {
     run_on(crate::discovery::agent_port(), access_code).await
 }
 
 /// Port-parameterized so tests can run simulated machines side by side.
-pub async fn run_on(port: u16, access_code: String) {
+pub async fn run_on(port: u16, access_code: String) -> Result<(), String> {
     let ctx = Arc::new(AgentCtx::new(access_code));
-    register(&ctx);
     let listener = match tokio::net::TcpListener::bind(("0.0.0.0", port)).await {
         Ok(l) => l,
-        Err(_) => return, // another instance is already serving
+        Err(e) => return Err(bind_failure(e)),
     };
+    // Register only after the socket is ours. A failed second start must not
+    // replace the live agent's access code.
+    register(&ctx);
     // ConnectInfo carries the peer address the throttle keys on.
-    let _ = axum::serve(
+    axum::serve(
         listener,
         router(ctx).into_make_service_with_connect_info::<SocketAddr>(),
     )
-    .await;
+    .await
+    .map_err(|e| format!("This computer stopped accepting connections ({e})."))
 }
 
 #[cfg(test)]
@@ -417,6 +440,29 @@ mod tests {
     use tower::ServiceExt;
 
     const CODE: &str = "TEST-CODE";
+
+    #[test]
+    fn an_in_use_port_is_one_clear_error() {
+        let msg = bind_failure(std::io::Error::new(std::io::ErrorKind::AddrInUse, "in use"));
+        assert!(msg.contains("already running"), "{msg}");
+        assert!(!msg.to_lowercase().contains("administrator"));
+    }
+
+    #[tokio::test]
+    async fn a_second_listener_reports_the_conflict_immediately() {
+        let held = tokio::net::TcpListener::bind(("0.0.0.0", 0)).await.unwrap();
+        let port = held.local_addr().unwrap().port();
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            run_on(port, "second-window".into()),
+        )
+        .await;
+        match result {
+            Ok(Err(msg)) => assert!(msg.contains("already running"), "{msg}"),
+            other => panic!("expected an immediate bind error, got {other:?}"),
+        }
+        drop(held);
+    }
 
     fn test_ctx() -> Arc<AgentCtx> {
         Arc::new(AgentCtx::new(CODE.into()))
@@ -445,7 +491,12 @@ mod tests {
     #[tokio::test]
     async fn rejects_unsigned_and_wrongly_signed_requests() {
         let resp = router(test_ctx())
-            .oneshot(Request::builder().uri("/metrics").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/metrics")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
@@ -557,12 +608,18 @@ mod tests {
     #[tokio::test]
     async fn rotating_the_code_takes_effect_immediately() {
         let ctx = test_ctx();
-        let resp = router(ctx.clone()).oneshot(authed("/metrics")).await.unwrap();
+        let resp = router(ctx.clone())
+            .oneshot(authed("/metrics"))
+            .await
+            .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
 
         ctx.set_access_code("ROTATED-CODE".into());
 
-        let resp = router(ctx.clone()).oneshot(authed("/metrics")).await.unwrap();
+        let resp = router(ctx.clone())
+            .oneshot(authed("/metrics"))
+            .await
+            .unwrap();
         assert_eq!(
             resp.status(),
             StatusCode::UNAUTHORIZED,
@@ -578,9 +635,14 @@ mod tests {
 
     #[tokio::test]
     async fn serves_metrics_with_a_valid_signature() {
-        let resp = router(test_ctx()).oneshot(authed("/metrics")).await.unwrap();
+        let resp = router(test_ctx())
+            .oneshot(authed("/metrics"))
+            .await
+            .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
-        let bytes = axum::body::to_bytes(resp.into_body(), 1_000_000).await.unwrap();
+        let bytes = axum::body::to_bytes(resp.into_body(), 1_000_000)
+            .await
+            .unwrap();
         let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert!(v.get("hostName").is_some());
         assert!(v.get("services").is_some());
@@ -642,13 +704,23 @@ mod tests {
         let p = path.to_string_lossy().replace('\\', "/");
 
         let up = router(test_ctx())
-            .oneshot(signed(CODE, "POST", &format!("/files/upload?path={p}&offset=0"), b"hello "))
+            .oneshot(signed(
+                CODE,
+                "POST",
+                &format!("/files/upload?path={p}&offset=0"),
+                b"hello ",
+            ))
             .await
             .unwrap();
         assert_eq!(up.status(), StatusCode::OK);
 
         let up2 = router(test_ctx())
-            .oneshot(signed(CODE, "POST", &format!("/files/upload?path={p}&offset=6"), b"world"))
+            .oneshot(signed(
+                CODE,
+                "POST",
+                &format!("/files/upload?path={p}&offset=6"),
+                b"world",
+            ))
             .await
             .unwrap();
         assert_eq!(up2.status(), StatusCode::OK);
@@ -658,7 +730,9 @@ mod tests {
             .oneshot(authed(&format!("/files/stat?path={p}")))
             .await
             .unwrap();
-        let bytes = axum::body::to_bytes(stat.into_body(), 1_000_000).await.unwrap();
+        let bytes = axum::body::to_bytes(stat.into_body(), 1_000_000)
+            .await
+            .unwrap();
         let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(v["size"].as_u64().unwrap(), 11);
 
@@ -667,7 +741,9 @@ mod tests {
             .oneshot(authed(&format!("/files/download?path={p}&offset=6")))
             .await
             .unwrap();
-        let bytes = axum::body::to_bytes(down.into_body(), 1_000_000).await.unwrap();
+        let bytes = axum::body::to_bytes(down.into_body(), 1_000_000)
+            .await
+            .unwrap();
         assert_eq!(&bytes[..], b"world");
 
         std::env::remove_var("NODEDESK_INCOMING_DIR");
@@ -686,9 +762,14 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
-        let bytes = axum::body::to_bytes(resp.into_body(), 1_000_000).await.unwrap();
+        let bytes = axum::body::to_bytes(resp.into_body(), 1_000_000)
+            .await
+            .unwrap();
         let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        assert!(v["output"].as_str().unwrap_or("").contains("nodedesk-agent-ok"));
+        assert!(v["output"]
+            .as_str()
+            .unwrap_or("")
+            .contains("nodedesk-agent-ok"));
         assert!(!v["cwd"].as_str().unwrap_or("").is_empty());
     }
 

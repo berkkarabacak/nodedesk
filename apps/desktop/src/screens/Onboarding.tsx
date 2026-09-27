@@ -77,7 +77,11 @@ export default function Onboarding({ onDone }: { onDone: (mode: UsageMode) => vo
               <Loader2 className="mx-auto h-10 w-10 animate-spin text-emerald-400" />
               <h1 className="mt-6 text-xl font-bold">Setting up this computer</h1>
               <p className="mt-3 text-sm text-zinc-400">{progress}</p>
-              <p className="mt-2 text-xs text-zinc-600">This can take a couple of minutes the first time.</p>
+              <p className="mt-2 text-xs text-zinc-600">
+                This can take a couple of minutes the first time.
+                {mode !== 'controller' &&
+                  ' If Windows asks once to approve the host service, that prompt is expected.'}
+              </p>
             </>
           ) : (
             <>

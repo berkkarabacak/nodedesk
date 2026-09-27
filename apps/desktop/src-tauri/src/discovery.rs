@@ -122,7 +122,7 @@ struct TailscalePeer {
 /// Online tailnet peers (if Tailscale is installed). Presence of the NodeDesk
 /// agent is probed separately — a closed agent port just means "not NodeDesk".
 pub fn tailscale_peers() -> Vec<FoundHost> {
-    let out = std::process::Command::new("tailscale")
+    let out = crate::procutil::hidden_command("tailscale")
         .args(["status", "--json"])
         .output();
     let Ok(out) = out else { return vec![] };

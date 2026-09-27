@@ -63,7 +63,7 @@ pub fn execute(cmd: &str, cwd: &str) -> TerminalResult {
         ("sh", vec!["-c".into(), wrapped])
     };
 
-    let spawn = std::process::Command::new(shell)
+    let spawn = crate::procutil::hidden_command(shell)
         .args(&args)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())

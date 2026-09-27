@@ -7,7 +7,7 @@
 use serde::Deserialize;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use tauri::{AppHandle, Emitter};
 
 use crate::state::{AppState, Settings};
@@ -165,7 +165,7 @@ pub fn extract_pin(line: &str) -> Option<String> {
 /// Runs `moonlight pair <host>`, forwarding the displayed PIN to the UI via
 /// the `pair-pin` event. Resolves when pairing completes or times out.
 pub async fn pair(app: AppHandle, exe: PathBuf, host: String) -> Result<(), String> {
-    let mut child = Command::new(&exe)
+    let mut child = crate::procutil::hidden_command(&exe)
         .args(["pair", &host])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -240,7 +240,7 @@ pub fn stream_args(settings: &Settings, host: &str) -> Vec<String> {
 
 pub fn start_stream(state: &AppState, exe: PathBuf, settings: &Settings, host: &str) -> Result<(), String> {
     let args = stream_args(settings, host);
-    let child = Command::new(exe)
+    let child = crate::procutil::hidden_command(exe)
         .args(&args)
         .spawn()
         .map_err(|e| format!("failed to start Moonlight: {e}"))?;

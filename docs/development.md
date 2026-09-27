@@ -82,6 +82,22 @@ Not covered by automation (needs real hardware): the video stream itself
 (upstream Sunshine/Moonlight domain), real GPU encoder paths, and physical
 multi-machine runs.
 
+## Windows console windows
+
+The packaged shell is a GUI-subsystem binary. Any child console program
+(`powershell`, `sc`, `net`, `pnputil`, `nvidia-smi`, `tailscale`, `cmd`)
+allocates a visible console unless it is started with `CREATE_NO_WINDOW`.
+That flash showed up at launch (`sc query` from the status probe), every few
+seconds on the dashboard when Tailscale was installed, and again on Settings
+and Diagnostics (PowerShell display count, `pnputil`, `nvidia-smi`).
+
+Spawn background tools through `procutil::hidden_command`. Do not elevate
+NodeDesk itself, and do not add firewall rules on startup. Host setup may
+show one Windows approval for the upstream host installer; the virtual
+display driver shows one only after the user clicks Enable headless mode.
+A second copy of the app reports a single in-app error when its listener
+cannot bind — it does not open a system dialog.
+
 ## Conventions
 
 - Keep the repository buildable on `main` at all times.

@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
-import { api, defaultSettings, type Computer, type Settings } from './lib/api'
+import { useEffect, useState, type ReactNode } from 'react'
+import { api, defaultSettings, onEvent, type Computer, type Settings } from './lib/api'
 import Onboarding from './screens/Onboarding'
 import Dashboard from './screens/Dashboard'
 import DeviceDetail from './screens/DeviceDetail'
@@ -17,6 +17,7 @@ export default function App() {
   const [onboarded, setOnboarded] = useState(false)
   const [settings, setSettings] = useState<Settings>(defaultSettings)
   const [screen, setScreen] = useState<Screen>({ name: 'dashboard' })
+  const [hostNotice, setHostNotice] = useState<string | null>(null)
 
   useEffect(() => {
     Promise.all([api.getAppInfo(), api.getSettings()])
@@ -27,25 +28,55 @@ export default function App() {
       .finally(() => setReady(true))
   }, [])
 
-  if (!ready) return <div className="min-h-screen bg-zinc-950" />
+  useEffect(() => {
+    let unlisten: (() => void) | undefined
+    void onEvent('host-error', (msg) => setHostNotice(String(msg))).then((fn) => {
+      unlisten = fn
+    })
+    return () => unlisten?.()
+  }, [])
 
-  if (!onboarded) {
+  const notice = hostNotice ? (
+    <div className="border-b border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
+      <div className="mx-auto flex max-w-3xl items-start justify-between gap-4">
+        <p>{hostNotice}</p>
+        <button onClick={() => setHostNotice(null)} className="shrink-0 text-xs font-medium text-amber-200 hover:text-white">
+          Dismiss
+        </button>
+      </div>
+    </div>
+  ) : null
+
+  if (!ready) {
     return (
-      <Onboarding
-        onDone={(mode) => {
-          const next = { ...settings, mode }
-          setSettings(next)
-          setOnboarded(true)
-        }}
-      />
+      <div className="min-h-screen bg-zinc-950">
+        {notice}
+      </div>
     )
   }
 
+  if (!onboarded) {
+    return (
+      <>
+        {notice}
+        <Onboarding
+          onDone={(mode) => {
+            const next = { ...settings, mode }
+            setSettings(next)
+            setOnboarded(true)
+          }}
+        />
+      </>
+    )
+  }
+
+  let body: ReactNode
   switch (screen.name) {
     case 'device':
-      return <DeviceDetail computer={screen.computer} onBack={() => setScreen({ name: 'dashboard' })} />
+      body = <DeviceDetail computer={screen.computer} onBack={() => setScreen({ name: 'dashboard' })} />
+      break
     case 'settings':
-      return (
+      body = (
         <SettingsScreen
           settings={settings}
           onSave={(s) => {
@@ -56,10 +87,12 @@ export default function App() {
           onBack={() => setScreen({ name: 'dashboard' })}
         />
       )
+      break
     case 'diagnostics':
-      return <Diagnostics onBack={() => setScreen({ name: 'dashboard' })} />
+      body = <Diagnostics onBack={() => setScreen({ name: 'dashboard' })} />
+      break
     default:
-      return (
+      body = (
         <Dashboard
           settings={settings}
           onOpenDevice={(computer) => setScreen({ name: 'device', computer })}
@@ -68,4 +101,11 @@ export default function App() {
         />
       )
   }
+
+  return (
+    <>
+      {notice}
+      {body}
+    </>
+  )
 }

@@ -36,7 +36,9 @@ pub fn exe_path() -> Option<PathBuf> {
     }
     #[cfg(target_os = "macos")]
     {
-        candidates.push(PathBuf::from("/Applications/Sunshine.app/Contents/MacOS/Sunshine"));
+        candidates.push(PathBuf::from(
+            "/Applications/Sunshine.app/Contents/MacOS/Sunshine",
+        ));
     }
     candidates.into_iter().find(|p| p.exists())
 }
@@ -46,7 +48,7 @@ pub fn is_installed() -> bool {
 }
 
 fn run(cmd: &str, args: &[&str]) -> Result<String, String> {
-    let out = std::process::Command::new(cmd)
+    let out = crate::procutil::hidden_command(cmd)
         .args(args)
         .output()
         .map_err(|e| format!("failed to run {cmd}: {e}"))?;
@@ -82,11 +84,17 @@ pub fn service_running() -> bool {
 
 #[cfg(windows)]
 pub fn start_service() -> Result<(), String> {
-    let out = run("net", &["start", "SunshineService"])?;
+    // Already running: do not call `net start`. That command needs an
+    // administrator token when the service is stopped, and asking the user to
+    // relaunch NodeDesk elevated popped a UAC prompt for the whole app.
+    if service_running() {
+        return Ok(());
+    }
+    let out = run("net", &["start", "SunshineService"]).unwrap_or_default();
     if service_running() || out.contains("already been started") {
         Ok(())
     } else {
-        Err("Sunshine service did not start (try running NodeDesk as administrator once)".into())
+        Err("The host service did not start. Try setup again from this screen.".into())
     }
 }
 
@@ -103,7 +111,7 @@ pub fn start_service() -> Result<(), String> {
 #[cfg(target_os = "macos")]
 pub fn start_service() -> Result<(), String> {
     if let Some(exe) = exe_path() {
-        std::process::Command::new("open")
+        crate::procutil::hidden_command("open")
             .arg("-a")
             .arg(exe.parent().and_then(|p| p.parent()).unwrap_or(&exe))
             .spawn()
@@ -175,19 +183,20 @@ pub async fn ensure_installed(client: &reqwest::Client) -> Result<String, String
                 let n = a.name.to_lowercase();
                 n.contains("windows") && n.contains("installer") && n.ends_with(".exe")
             })
-            .ok_or("no Windows installer found in the latest Sunshine release")?;
+            .ok_or("Could not find a Windows installer for the host service.")?;
 
         let installer = std::env::temp_dir().join("nodedesk-sunshine-installer.exe");
         download_asset(client, &asset.browser_download_url, &installer).await?;
 
-        // Upstream installer is NSIS-based: /S = silent (installs service,
-        // firewall rules and starts Sunshine).
-        let status = std::process::Command::new(&installer)
-            .arg("/S")
-            .status()
-            .map_err(|e| format!("failed to launch Sunshine installer: {e}"))?;
-        if !status.success() {
-            return Err("Sunshine installer returned an error".into());
+        // Upstream installer is NSIS with a requireAdministrator manifest.
+        // CreateProcess on that binary fails with "requires elevation" and
+        // never shows consent, so setup looked broken or the user was told to
+        // relaunch NodeDesk as administrator. Shell elevation (`runas`) shows
+        // one consent dialog for this installer only. `/S` keeps it silent.
+        // The helper PowerShell has no console window.
+        if let Err(err) = crate::procutil::run_elevated_wait(&installer, &["/S"], true) {
+            let _ = std::fs::remove_file(&installer);
+            return Err(err);
         }
 
         for _ in 0..60 {
@@ -197,7 +206,10 @@ pub async fn ensure_installed(client: &reqwest::Client) -> Result<String, String
             std::thread::sleep(std::time::Duration::from_secs(2));
         }
         if !is_installed() {
-            return Err("Sunshine installer completed but sunshine.exe was not found".into());
+            return Err(
+                "The installer finished, but the host service was not found on this computer."
+                    .into(),
+            );
         }
         let _ = std::fs::remove_file(&installer);
         Ok(release.tag_name)
@@ -211,7 +223,11 @@ pub async fn ensure_installed(client: &reqwest::Client) -> Result<String, String
         let version_id = os_release
             .lines()
             .find(|l| l.starts_with("VERSION_ID="))
-            .map(|l| l.trim_start_matches("VERSION_ID=").trim_matches('"').to_string())
+            .map(|l| {
+                l.trim_start_matches("VERSION_ID=")
+                    .trim_matches('"')
+                    .to_string()
+            })
             .unwrap_or_default();
         let is_deb = os_release.contains("ubuntu") || os_release.contains("debian");
         if !is_deb {
@@ -239,7 +255,7 @@ pub async fn ensure_installed(client: &reqwest::Client) -> Result<String, String
         download_asset(client, &asset.browser_download_url, &deb).await?;
 
         // Package install needs root; try non-interactive sudo first.
-        let installed = std::process::Command::new("sudo")
+        let installed = crate::procutil::hidden_command("sudo")
             .args(["-n", "apt-get", "install", "-y"])
             .arg(&deb)
             .status()
@@ -271,18 +287,25 @@ pub fn ensure_credentials() -> Result<(), String> {
     }
     let exe = exe_path().ok_or("Sunshine is not installed")?;
     let password = crate::state::random_code(20);
-    let status = std::process::Command::new(exe)
+    // `--creds` returns before the host UI starts. Hide the console anyway:
+    // the Windows build is a console-subsystem binary and would otherwise
+    // flash a window on the GUI app.
+    let status = crate::procutil::hidden_command(exe)
         .args(["--creds", FIXED_USER, &password])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
         .status()
-        .map_err(|e| format!("failed to set Sunshine credentials: {e}"))?;
+        .map_err(|_| "Could not secure the host service.".to_string())?;
     if !status.success() {
-        return Err("Sunshine rejected credential setup".into());
+        return Err("Could not secure the host service.".into());
     }
     crate::state::store_secret(CREDS_KEY, &format!("{FIXED_USER}:{password}"))
 }
 
 fn auth_header() -> Result<String, String> {
-    let creds = crate::state::read_secret(CREDS_KEY).ok_or("Sunshine credentials not configured")?;
+    let creds =
+        crate::state::read_secret(CREDS_KEY).ok_or("Sunshine credentials not configured")?;
     Ok(format!(
         "Basic {}",
         base64::engine::general_purpose::STANDARD.encode(creds)

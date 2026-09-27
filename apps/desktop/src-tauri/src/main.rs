@@ -16,6 +16,7 @@ mod files;
 mod headless;
 mod monitor;
 mod moonlight;
+mod procutil;
 mod release;
 mod safepath;
 mod state;
@@ -116,8 +117,14 @@ fn dto_from_metrics(m: &monitor::Metrics, address: &str, via: &str, has_code: bo
         gpu_name: m.gpu.as_ref().map(|g| g.name.clone()),
         ram_used_gb: Some(m.ram_used_gb),
         ram_total_gb: Some(m.ram_total_gb),
-        vram_used_gb: m.gpu.as_ref().map(|g| (g.vram_used_mb as f32 / 1024.0 * 10.0).round() / 10.0),
-        vram_total_gb: m.gpu.as_ref().map(|g| (g.vram_total_mb as f32 / 1024.0).round()),
+        vram_used_gb: m
+            .gpu
+            .as_ref()
+            .map(|g| (g.vram_used_mb as f32 / 1024.0 * 10.0).round() / 10.0),
+        vram_total_gb: m
+            .gpu
+            .as_ref()
+            .map(|g| (g.vram_total_mb as f32 / 1024.0).round()),
         uptime: Some(fmt_uptime(m.uptime_secs)),
         mac: m.mac.clone(),
         has_access_code: has_code,
@@ -132,39 +139,56 @@ fn dto_from_metrics(m: &monitor::Metrics, address: &str, via: &str, has_code: bo
 #[tauri::command]
 fn get_app_info(state: State<'_, AppState>) -> AppInfo {
     let settings = state.settings.read().map(|s| s.clone()).unwrap_or_default();
+    // Probing the service shells out (`sc` / `systemctl`). Skip it until this
+    // computer is actually a host — a fresh launch used to flash a console
+    // before the user had chosen anything.
+    let host_mode = settings.onboarded && (settings.mode == "host" || settings.mode == "both");
     AppInfo {
         version: env!("CARGO_PKG_VERSION").to_string(),
         onboarded: settings.onboarded,
         mode: settings.mode,
         sunshine_installed: sunshine::is_installed(),
-        sunshine_running: sunshine::service_running(),
+        sunshine_running: host_mode && sunshine::service_running(),
         moonlight_present: moonlight::moonlight_exe(&state.config_dir).is_some(),
         host_name: sysinfo::System::host_name().unwrap_or_else(|| "Computer".into()),
     }
 }
 
 #[tauri::command]
-async fn complete_onboarding(app: AppHandle, state: State<'_, AppState>, mode: String) -> Result<(), String> {
+async fn complete_onboarding(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    mode: String,
+) -> Result<(), String> {
     {
         let mut settings = state.settings.write().map_err(|e| e.to_string())?;
         settings.mode = mode.clone();
         settings.onboarded = true;
     }
     state.save_settings();
-    set_autostart(state.settings.read().map(|s| s.start_on_boot).unwrap_or(true));
+    set_autostart(
+        state
+            .settings
+            .read()
+            .map(|s| s.start_on_boot)
+            .unwrap_or(true),
+    );
 
     if mode == "host" || mode == "both" {
         // Host capability: start agent now, bootstrap Sunshine in background.
         let code = ensure_access_code();
-        tauri::async_runtime::spawn(agent::run(code));
+        spawn_host_agent(&app, code);
         let app2 = app.clone();
         tauri::async_runtime::spawn(async move {
-            let _ = app2.emit("bootstrap-progress", "Installing Sunshine host…");
+            let _ = app2.emit(
+                "bootstrap-progress",
+                "Installing the host service… Windows may ask once to approve it.",
+            );
             let state2 = app2.state::<AppState>();
             let result = sunshine::ensure_installed(&state2.http).await;
             match result {
                 Ok(tag) => {
-                    let _ = app2.emit("bootstrap-progress", format!("Sunshine ready ({tag})"));
+                    let _ = app2.emit("bootstrap-progress", host_ready_message(&tag));
                     let _ = app2.emit("bootstrap-progress", "Securing host…".to_string());
                     let creds = sunshine::ensure_credentials();
                     if let Err(e) = creds {
@@ -192,10 +216,13 @@ async fn complete_onboarding(app: AppHandle, state: State<'_, AppState>, mode: S
 #[tauri::command]
 async fn bootstrap_host(app: AppHandle) -> Result<(), String> {
     // Retry path identical to the onboarding background task.
-    let _ = app.emit("bootstrap-progress", "Installing Sunshine host…".to_string());
+    let _ = app.emit(
+        "bootstrap-progress",
+        "Installing the host service… Windows may ask once to approve it.".to_string(),
+    );
     let state = app.state::<AppState>();
     let tag = sunshine::ensure_installed(&state.http).await?;
-    let _ = app.emit("bootstrap-progress", format!("Sunshine ready ({tag})"));
+    let _ = app.emit("bootstrap-progress", host_ready_message(&tag));
     sunshine::ensure_credentials()?;
     sunshine::start_service()?;
     let _ = app.emit("bootstrap-done", true);
@@ -241,7 +268,8 @@ async fn list_computers(state: State<'_, AppState>) -> Result<Vec<ComputerDto>, 
             Some(code) => fetch_metrics(&state.http, &host.address, code).await,
             None => None,
         };
-        let present = metrics.is_some() || discovery::agent_present(&state.http, &host.address).await;
+        let present =
+            metrics.is_some() || discovery::agent_present(&state.http, &host.address).await;
         match metrics {
             Some(m) => out.push(dto_from_metrics(&m, &host.address, &host.via, true)),
             None => {
@@ -277,7 +305,11 @@ async fn list_computers(state: State<'_, AppState>) -> Result<Vec<ComputerDto>, 
     Ok(out)
 }
 
-async fn fetch_metrics(client: &reqwest::Client, address: &str, code: &str) -> Option<monitor::Metrics> {
+async fn fetch_metrics(
+    client: &reqwest::Client,
+    address: &str,
+    code: &str,
+) -> Option<monitor::Metrics> {
     client::AgentRequest::get(address, discovery::agent_port(), "/metrics")
         .timeout(std::time::Duration::from_millis(1500))
         .send_ok(client, code)
@@ -289,7 +321,11 @@ async fn fetch_metrics(client: &reqwest::Client, address: &str, code: &str) -> O
 }
 
 #[tauri::command]
-async fn add_manual_host(state: State<'_, AppState>, address: String, code: String) -> Result<String, String> {
+async fn add_manual_host(
+    state: State<'_, AppState>,
+    address: String,
+    code: String,
+) -> Result<String, String> {
     let metrics = fetch_metrics(&state.http, &address, &code)
         .await
         .ok_or("Can't reach a NodeDesk host at that address — check the address and access code")?;
@@ -350,7 +386,11 @@ fn disconnect_computer(state: State<'_, AppState>) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn power_action(state: State<'_, AppState>, address: String, action: String) -> Result<(), String> {
+async fn power_action(
+    state: State<'_, AppState>,
+    address: String,
+    action: String,
+) -> Result<(), String> {
     let code = state::code_for_host(&state, &address)
         .ok_or("No access code stored for this computer — add it again with its code")?;
     // `send_ok` fails on a rejected request, so the UI cannot report a
@@ -365,12 +405,15 @@ async fn power_action(state: State<'_, AppState>, address: String, action: Strin
 
 #[tauri::command]
 fn wake_computer(state: State<'_, AppState>, address: String) -> Result<(), String> {
-    let mac = state
-        .settings
-        .read()
-        .ok()
-        .and_then(|s| s.manual_hosts.iter().find(|h| h.address == address).and_then(|h| h.mac.clone()));
-    let mac = mac.ok_or("No MAC address known for this computer — connect once while it is online, or re-add it")?;
+    let mac = state.settings.read().ok().and_then(|s| {
+        s.manual_hosts
+            .iter()
+            .find(|h| h.address == address)
+            .and_then(|h| h.mac.clone())
+    });
+    let mac = mac.ok_or(
+        "No MAC address known for this computer — connect once while it is online, or re-add it",
+    )?;
     wol::wake(&mac)
 }
 
@@ -385,7 +428,7 @@ async fn run_diagnostics(state: State<'_, AppState>) -> Result<Vec<DiagnosticsIt
     let sunshine_running = sunshine::service_running();
     let api_ok = sunshine::api_reachable(&state.http_local).await;
     let gpu = monitor::collect();
-    let tailscale_installed = std::process::Command::new("tailscale")
+    let tailscale_installed = crate::procutil::hidden_command("tailscale")
         .arg("version")
         .output()
         .map(|o| o.status.success())
@@ -409,12 +452,20 @@ async fn run_diagnostics(state: State<'_, AppState>) -> Result<Vec<DiagnosticsIt
         DiagnosticsItem {
             label: "Host API".into(),
             ok: api_ok,
-            detail: Some(if api_ok { "Local Sunshine API responding".into() } else { "Not reachable on this machine".into() }),
+            detail: Some(if api_ok {
+                "Local Sunshine API responding".into()
+            } else {
+                "Not reachable on this machine".into()
+            }),
         },
         DiagnosticsItem {
             label: "Controller".into(),
             ok: moonlight_ok,
-            detail: Some(if moonlight_ok { "Moonlight client ready".into() } else { "Will download on first connect".into() }),
+            detail: Some(if moonlight_ok {
+                "Moonlight client ready".into()
+            } else {
+                "Will download on first connect".into()
+            }),
         },
         DiagnosticsItem {
             label: "GPU".into(),
@@ -432,7 +483,11 @@ async fn run_diagnostics(state: State<'_, AppState>) -> Result<Vec<DiagnosticsIt
         DiagnosticsItem {
             label: "Tailscale".into(),
             ok: tailscale_installed,
-            detail: Some(if tailscale_installed { "Installed".into() } else { "Not installed (optional)".into() }),
+            detail: Some(if tailscale_installed {
+                "Installed".into()
+            } else {
+                "Not installed (optional)".into()
+            }),
         },
         DiagnosticsItem {
             label: "Virtual display".into(),
@@ -516,9 +571,13 @@ async fn check_update(state: State<'_, AppState>) -> Result<update::UpdateInfo, 
 // ---------------------------------------------------------------------------
 
 #[tauri::command]
-async fn list_files(state: State<'_, AppState>, address: String, path: String) -> Result<Vec<files::FileEntry>, String> {
-    let code = state::code_for_host(&state, &address)
-        .ok_or("No access code stored for this computer")?;
+async fn list_files(
+    state: State<'_, AppState>,
+    address: String,
+    path: String,
+) -> Result<Vec<files::FileEntry>, String> {
+    let code =
+        state::code_for_host(&state, &address).ok_or("No access code stored for this computer")?;
     client::AgentRequest::get(&address, discovery::agent_port(), "/files/list")
         .query(vec![("path", path)])
         .timeout(std::time::Duration::from_millis(3000))
@@ -551,7 +610,9 @@ async fn download_file(app: AppHandle, address: String, path: String) -> Result<
 
 #[tauri::command]
 fn cancel_transfer(state: State<'_, AppState>) {
-    state.transfer_cancel.store(true, std::sync::atomic::Ordering::SeqCst);
+    state
+        .transfer_cancel
+        .store(true, std::sync::atomic::Ordering::SeqCst);
 }
 
 #[tauri::command]
@@ -565,9 +626,14 @@ async fn enable_headless(state: State<'_, AppState>) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn terminal_exec(state: State<'_, AppState>, address: String, command: String, cwd: String) -> Result<terminal::TerminalResult, String> {
-    let code = state::code_for_host(&state, &address)
-        .ok_or("No access code stored for this computer")?;
+async fn terminal_exec(
+    state: State<'_, AppState>,
+    address: String,
+    command: String,
+    cwd: String,
+) -> Result<terminal::TerminalResult, String> {
+    let code =
+        state::code_for_host(&state, &address).ok_or("No access code stored for this computer")?;
     client::AgentRequest::post(&address, discovery::agent_port(), "/terminal")
         .json(&serde_json::json!({ "command": command, "cwd": cwd }))?
         .timeout(std::time::Duration::from_secs(35))
@@ -580,7 +646,9 @@ async fn terminal_exec(state: State<'_, AppState>, address: String, command: Str
 
 #[cfg(windows)]
 fn set_autostart(enabled: bool) {
-    let Ok(exe) = std::env::current_exe() else { return };
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
     let hkcu = winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER);
     let Ok((key, _)) = hkcu.create_subkey(r"Software\Microsoft\Windows\CurrentVersion\Run") else {
         return;
@@ -594,11 +662,15 @@ fn set_autostart(enabled: bool) {
 
 #[cfg(target_os = "linux")]
 fn set_autostart(enabled: bool) {
-    let Some(config) = dirs::config_dir() else { return };
+    let Some(config) = dirs::config_dir() else {
+        return;
+    };
     let dir = config.join("autostart");
     let file = dir.join("nodedesk.desktop");
     if enabled {
-        let Ok(exe) = std::env::current_exe() else { return };
+        let Ok(exe) = std::env::current_exe() else {
+            return;
+        };
         let _ = std::fs::create_dir_all(&dir);
         let desktop = format!(
             "[Desktop Entry]\nType=Application\nName=NodeDesk\nExec={}\nX-GNOME-Autostart-enabled=true\n",
@@ -616,7 +688,9 @@ fn set_autostart(enabled: bool) {
     let dir = home.join("Library/LaunchAgents");
     let file = dir.join("dev.nodedesk.app.plist");
     if enabled {
-        let Ok(exe) = std::env::current_exe() else { return };
+        let Ok(exe) = std::env::current_exe() else {
+            return;
+        };
         let _ = std::fs::create_dir_all(&dir);
         let plist = format!(
             "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\"><dict>\n<key>Label</key><string>dev.nodedesk.app</string>\n<key>ProgramArguments</key><array><string>{}</string></array>\n<key>RunAtLoad</key><true/>\n</dict></plist>\n",
@@ -628,6 +702,25 @@ fn set_autostart(enabled: bool) {
     }
 }
 
+fn host_ready_message(tag: &str) -> String {
+    if tag == "already installed" {
+        "Host service is ready".into()
+    } else {
+        format!("Host service ready ({tag})")
+    }
+}
+
+/// Starts the host agent. A bind failure is one in-app event — never a
+/// system dialog, and never a silent "host doesn't work".
+fn spawn_host_agent(app: &AppHandle, code: String) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        if let Err(message) = agent::run(code).await {
+            let _ = app.emit("host-error", message);
+        }
+    });
+}
+
 fn main() {
     tauri::Builder::default()
         .setup(|app| {
@@ -636,14 +729,22 @@ fn main() {
                 .app_config_dir()
                 .unwrap_or_else(|_| std::path::PathBuf::from("."));
             let app_state = AppState::new(dir);
-            let onboarded = app_state.settings.read().map(|s| s.onboarded).unwrap_or(false);
-            let mode = app_state.settings.read().map(|s| s.mode.clone()).unwrap_or_default();
+            let onboarded = app_state
+                .settings
+                .read()
+                .map(|s| s.onboarded)
+                .unwrap_or(false);
+            let mode = app_state
+                .settings
+                .read()
+                .map(|s| s.mode.clone())
+                .unwrap_or_default();
             app.manage(app_state);
 
             discovery::start_responder();
             if onboarded && (mode == "host" || mode == "both") {
                 let code = ensure_access_code();
-                tauri::async_runtime::spawn(agent::run(code));
+                spawn_host_agent(app.handle(), code);
             }
             Ok(())
         })
