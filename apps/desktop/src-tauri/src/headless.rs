@@ -138,9 +138,7 @@ pub async fn install_vdd(client: &reqwest::Client) -> Result<(), String> {
         // installer window stays visible; only the helper has no console.
         let launched = crate::procutil::run_elevated_wait(&installer, &[], false);
         let _ = std::fs::remove_file(&installer);
-        if let Err(err) = launched {
-            return Err(err);
-        }
+        launched?;
     } else if zip_asset.is_some() {
         return Err(
             "This VDD release needs manual setup — download it from the link in docs/development.md and run its installer"
