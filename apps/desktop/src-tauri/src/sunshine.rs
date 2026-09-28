@@ -167,6 +167,102 @@ async fn download_asset(
     std::fs::write(dest, &bytes).map_err(|e| e.to_string())
 }
 
+/// Windows Installer code for "success, reboot required". `/norestart` still
+/// returns this when the package asked for a reboot.
+#[cfg_attr(not(windows), allow(dead_code))]
+const MSI_EXIT_SUCCESS_REBOOT: i32 = 3010;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(not(windows), allow(dead_code))]
+enum HostInstallerKind {
+    Exe,
+    Msi,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(not(windows), allow(dead_code))]
+struct HostInstaller<'a> {
+    name: &'a str,
+    kind: HostInstallerKind,
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+fn is_explicit_arm(name: &str) -> bool {
+    let n = name.to_lowercase();
+    n.contains("arm64") || n.contains("aarch64")
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+fn is_explicit_amd64(name: &str) -> bool {
+    let n = name.to_lowercase();
+    n.contains("amd64") || n.contains("x86_64") || n.contains("x64")
+}
+
+/// `windows` + `installer` + `.msi` or `.exe` only. Zips, debug symbols, and
+/// packages for other operating systems stay out. An asset that names the
+/// other CPU architecture is skipped so an AMD64 PC does not receive the
+/// ARM64 package when both are published.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn select_windows_host_installer<'a>(names: &[&'a str], host_arch: &str) -> Option<HostInstaller<'a>> {
+    let wants_arm = host_arch == "aarch64";
+    names
+        .iter()
+        .filter_map(|name| {
+            let n = name.to_lowercase();
+            if !n.contains("windows") || !n.contains("installer") {
+                return None;
+            }
+            let kind = if n.ends_with(".msi") {
+                HostInstallerKind::Msi
+            } else if n.ends_with(".exe") {
+                HostInstallerKind::Exe
+            } else {
+                return None;
+            };
+            let arm = is_explicit_arm(name);
+            let amd = is_explicit_amd64(name);
+            let arch_rank = if wants_arm {
+                if arm {
+                    2
+                } else if amd {
+                    return None;
+                } else {
+                    1
+                }
+            } else if amd {
+                2
+            } else if arm {
+                return None;
+            } else {
+                1
+            };
+            // Current upstream releases ship an MSI. Prefer it when an older
+            // `.exe` installer is also attached to the same release.
+            let kind_rank = if kind == HostInstallerKind::Msi { 2 } else { 1 };
+            Some((arch_rank, kind_rank, HostInstaller { name, kind }))
+        })
+        .max_by_key(|(arch_rank, kind_rank, _)| (*arch_rank, *kind_rank))
+        .map(|(_, _, choice)| choice)
+}
+
+/// Quiet MSI install. One elevated `msiexec` shows the consent dialog;
+/// `/quiet` keeps the installer UI from appearing after that.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn msi_quiet_args(package: &std::path::Path) -> Vec<String> {
+    vec![
+        "/i".into(),
+        package.to_string_lossy().into_owned(),
+        "/quiet".into(),
+        "/norestart".into(),
+    ]
+}
+
+#[cfg(windows)]
+fn msiexec_path() -> PathBuf {
+    let root = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into());
+    PathBuf::from(root).join("System32").join("msiexec.exe")
+}
+
 /// Downloads and installs the latest upstream Sunshine release.
 pub async fn ensure_installed(client: &reqwest::Client) -> Result<String, String> {
     if is_installed() {
@@ -176,25 +272,39 @@ pub async fn ensure_installed(client: &reqwest::Client) -> Result<String, String
     #[cfg(windows)]
     {
         let release = latest_release(client).await?;
+        let names: Vec<&str> = release.assets.iter().map(|a| a.name.as_str()).collect();
+        let choice = select_windows_host_installer(&names, std::env::consts::ARCH)
+            .ok_or("Could not find a Windows installer for the host service.")?;
         let asset = release
             .assets
             .iter()
-            .find(|a| {
-                let n = a.name.to_lowercase();
-                n.contains("windows") && n.contains("installer") && n.ends_with(".exe")
-            })
+            .find(|a| a.name == choice.name)
             .ok_or("Could not find a Windows installer for the host service.")?;
 
-        let installer = std::env::temp_dir().join("nodedesk-sunshine-installer.exe");
+        // Fixed local name. The remote asset name must not become the path.
+        let installer = match choice.kind {
+            HostInstallerKind::Msi => std::env::temp_dir().join("nodedesk-sunshine-installer.msi"),
+            HostInstallerKind::Exe => std::env::temp_dir().join("nodedesk-sunshine-installer.exe"),
+        };
         download_asset(client, &asset.browser_download_url, &installer).await?;
 
-        // Upstream installer is NSIS with a requireAdministrator manifest.
-        // CreateProcess on that binary fails with "requires elevation" and
-        // never shows consent, so setup looked broken or the user was told to
-        // relaunch NodeDesk as administrator. Shell elevation (`runas`) shows
-        // one consent dialog for this installer only. `/S` keeps it silent.
-        // The helper PowerShell has no console window.
-        if let Err(err) = crate::procutil::run_elevated_wait(&installer, &["/S"], true) {
+        // One consent dialog for this installer only. NodeDesk itself stays
+        // unelevated. Current releases are an MSI (`msiexec /quiet`). Older
+        // releases attached an NSIS `.exe` that understands `/S`.
+        let launched = match choice.kind {
+            HostInstallerKind::Exe => crate::procutil::run_elevated_wait(&installer, &["/S"], true),
+            HostInstallerKind::Msi => {
+                let args = msi_quiet_args(&installer);
+                let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+                crate::procutil::run_elevated_wait_codes(
+                    &msiexec_path(),
+                    &refs,
+                    true,
+                    &[MSI_EXIT_SUCCESS_REBOOT],
+                )
+            }
+        };
+        if let Err(err) = launched {
             let _ = std::fs::remove_file(&installer);
             return Err(err);
         }
@@ -355,6 +465,79 @@ pub async fn api_reachable(client: &reqwest::Client) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn selects_the_current_sunshine_windows_msi() {
+        // Asset names from LizardByte/Sunshine v2026.914.233613. The release
+        // has no `.exe` installer; an `.exe`-only matcher skips the install.
+        let assets = [
+            "Sunshine-Windows-AMD64-debuginfo.7z",
+            "Sunshine-Windows-AMD64-installer.msi",
+            "Sunshine-Windows-AMD64-lite.zip",
+            "Sunshine-Windows-ARM64-debuginfo.7z",
+            "Sunshine-Windows-ARM64-installer.msi",
+            "Sunshine-Windows-ARM64-lite.zip",
+            "sunshine_2026.914.233613-1+ubuntu24.04_amd64.deb",
+        ];
+        let choice = select_windows_host_installer(&assets, "x86_64").unwrap();
+        assert_eq!(choice.name, "Sunshine-Windows-AMD64-installer.msi");
+        assert_eq!(choice.kind, HostInstallerKind::Msi);
+
+        let arm = select_windows_host_installer(&assets, "aarch64").unwrap();
+        assert_eq!(arm.name, "Sunshine-Windows-ARM64-installer.msi");
+    }
+
+    #[test]
+    fn still_selects_a_legacy_windows_exe_installer() {
+        let assets = [
+            "sunshine-windows-installer.exe",
+            "Sunshine-Windows-AMD64-lite.zip",
+        ];
+        let choice = select_windows_host_installer(&assets, "x86_64").unwrap();
+        assert_eq!(choice.name, "sunshine-windows-installer.exe");
+        assert_eq!(choice.kind, HostInstallerKind::Exe);
+    }
+
+    #[test]
+    fn prefers_msi_and_ignores_non_installers() {
+        let assets = [
+            "sunshine-windows-installer.exe",
+            "Sunshine-Windows-AMD64-installer.msi",
+            "windows-something.exe",
+            "Sunshine-Windows-AMD64-lite.zip",
+        ];
+        let choice = select_windows_host_installer(&assets, "x86_64").unwrap();
+        assert_eq!(choice.name, "Sunshine-Windows-AMD64-installer.msi");
+        assert!(select_windows_host_installer(
+            &["Sunshine-Windows-AMD64-lite.zip", "not-an-installer.msi"],
+            "x86_64"
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn does_not_install_the_other_cpu_architecture() {
+        let only_arm = ["Sunshine-Windows-ARM64-installer.msi"];
+        assert!(select_windows_host_installer(&only_arm, "x86_64").is_none());
+        let only_amd = ["Sunshine-Windows-AMD64-installer.msi"];
+        assert!(select_windows_host_installer(&only_amd, "aarch64").is_none());
+    }
+
+    #[test]
+    fn msi_install_is_quiet_and_does_not_reboot() {
+        let args = msi_quiet_args(std::path::Path::new(
+            r"C:\Users\Berk\AppData\Local\Temp\nodedesk-sunshine-installer.msi",
+        ));
+        assert_eq!(
+            args,
+            vec![
+                "/i",
+                r"C:\Users\Berk\AppData\Local\Temp\nodedesk-sunshine-installer.msi",
+                "/quiet",
+                "/norestart",
+            ]
+        );
+    }
 
     #[test]
     fn pin_cleaning() {

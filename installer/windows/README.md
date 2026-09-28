@@ -12,9 +12,9 @@ and a user config directory. The installer does not add firewall rules and
 does not install Sunshine. Those need administrator rights, so they happen
 later, only after the user chooses host mode:
 
-- Sunshine's own installer runs once, with a single consent prompt, silent
-  (`/S`). It installs the service and its firewall rules. NodeDesk is not
-  relaunched elevated.
+- Sunshine's own installer runs once, with a single consent prompt. Current
+  releases are an MSI (`msiexec /i … /quiet /norestart`). Older `.exe`
+  installers still use silent `/S`. NodeDesk is not relaunched elevated.
 - The virtual display driver is a separate consent prompt, and only after
   **Enable headless mode** in Settings.
 

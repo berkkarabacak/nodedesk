@@ -98,6 +98,20 @@ pub fn run_elevated_wait(
     args: &[&str],
     hide_installer_window: bool,
 ) -> Result<(), String> {
+    run_elevated_wait_codes(program, args, hide_installer_window, &[])
+}
+
+/// Same as `run_elevated_wait`, but treats extra process exit codes as success.
+///
+/// `msiexec /norestart` returns 3010 when setup finished and a reboot is
+/// pending. That is a successful install, not a failed consent prompt.
+#[cfg(windows)]
+pub fn run_elevated_wait_codes(
+    program: &Path,
+    args: &[&str],
+    hide_installer_window: bool,
+    extra_success: &[i32],
+) -> Result<(), String> {
     if !program.is_file() {
         return Err("the installer file is missing, so setup did not start".into());
     }
@@ -116,7 +130,8 @@ pub fn run_elevated_wait(
         ])
         .output()
         .map_err(|e| format!("could not ask Windows to start setup: {e}"))?;
-    if out.status.success() {
+    let code = out.status.code();
+    if code == Some(0) || code.is_some_and(|c| extra_success.contains(&c)) {
         return Ok(());
     }
     let detail = format!(
