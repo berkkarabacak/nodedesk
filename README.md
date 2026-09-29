@@ -133,6 +133,26 @@ use Tailscale when the network itself is untrusted. The full model, including
 what is *not* yet mitigated, is in [docs/security.md](docs/security.md). To
 report a vulnerability, see [SECURITY.md](SECURITY.md).
 
+## Account sync
+
+Same-account computers can show up even when they are not on this LAN.
+[ADR 0002](docs/adr/0002-account-based-fleet.md) is the decision: Google
+sign-in, a device list, and connect only through a private or Tailscale
+address the registry already has. There is no hole punching in this slice, and
+Sunshine is still not opened to the public internet. With nobody signed in,
+discovery behaves exactly as before.
+
+This repository does not contain a Google Cloud project or a hosted registry.
+The owner supplies both:
+
+1. **Google OAuth Desktop client id** — public PKCE client, no client secret.
+   Set `NODEDESK_GOOGLE_CLIENT_ID`, or Settings → Advanced → Sign-in client ID.
+   Loopback redirect: `http://127.0.0.1:<port>/callback`.
+2. **Registry base URL** — HTTPS service that implements the contract in
+   `apps/desktop/src-tauri/src/registry.rs`. Set `NODEDESK_REGISTRY_URL`, or
+   Settings → Advanced → Account service address. `mock://local` is an
+   in-process stub for development, not a fleet.
+
 ## Roadmap
 
 Priorities, in order: **stability → security → simplicity → performance →
@@ -176,6 +196,8 @@ apps/desktop/src-tauri/src/  Rust core:
   files.rs                     resumable file transfer
   terminal.rs                  remote command execution
   discovery.rs                 LAN broadcast + tailnet discovery
+  account.rs                   Google sign-in session (OS secure storage)
+  registry.rs                  account device list; merges into the dashboard
   monitor.rs                   CPU/RAM/GPU/VRAM metrics, AI service detection
   sunshine.rs / moonlight.rs   upstream host and client integration
   headless.rs                  virtual display driver management

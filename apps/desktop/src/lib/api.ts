@@ -11,7 +11,8 @@ export interface Computer {
   name: string
   os: string
   address: string
-  via: 'lan' | 'tailscale' | 'manual'
+  via: 'lan' | 'tailscale' | 'manual' | 'account'
+  addressCandidates?: string[]
   online: boolean
   specs: string
   cpuPct?: number
@@ -45,6 +46,19 @@ export interface Settings {
   hdr: boolean
   onboarded?: boolean
   manualHosts?: ManualHost[]
+  /** Owner-supplied Google sign-in client id. Not a password. */
+  googleClientId?: string
+  /** Account registry base URL. Empty uses the installation default, if any. */
+  registryBaseUrl?: string
+  deviceId?: string
+}
+
+export interface AccountStatus {
+  configured: boolean
+  registryConfigured: boolean
+  signedIn: boolean
+  email?: string
+  linked: boolean
 }
 
 export const defaultSettings: Settings = {
@@ -57,6 +71,8 @@ export const defaultSettings: Settings = {
   fps: 60,
   resolution: 'auto',
   hdr: false,
+  googleClientId: '',
+  registryBaseUrl: '',
 }
 
 export interface AppInfo {
@@ -179,6 +195,24 @@ const mockComputers: Computer[] = [
 
 let mockSettings: Settings = { ...defaultSettings }
 let mockOnboarded = false
+let mockAccount: AccountStatus = {
+  configured: true,
+  registryConfigured: true,
+  signedIn: false,
+  linked: false,
+}
+
+const mockAccountComputer: Computer = {
+  id: 'account:travel-laptop',
+  name: 'Travel Laptop',
+  os: 'macos',
+  address: '100.64.0.8',
+  via: 'account',
+  online: true,
+  specs: 'On your account',
+  hasAccessCode: false,
+  addressCandidates: ['100.64.0.8'],
+}
 
 const mockListeners: Record<string, Listener[]> = {}
 
@@ -223,8 +257,33 @@ async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Promi
     case 'bootstrap_host':
       setTimeout(() => mockEmit('bootstrap-done', 'true'), 800)
       return undefined as T
-    case 'list_computers':
-      return structuredClone(mockComputers) as T
+    case 'list_computers': {
+      const list = structuredClone(mockComputers)
+      if (mockAccount.signedIn) list.push(structuredClone(mockAccountComputer))
+      return list as T
+    }
+    case 'account_status':
+      return { ...mockAccount } as T
+    case 'sign_in_with_google':
+      mockAccount = {
+        ...mockAccount,
+        signedIn: true,
+        email: 'you@example.com',
+        linked: mockAccount.registryConfigured,
+      }
+      return { ...mockAccount } as T
+    case 'sign_out_account':
+      mockAccount = {
+        configured: true,
+        registryConfigured: true,
+        signedIn: false,
+        linked: false,
+      }
+      return { ...mockAccount } as T
+    case 'link_this_computer':
+      if (!mockAccount.signedIn) throw new Error('Sign in before linking this computer.')
+      mockAccount = { ...mockAccount, linked: true }
+      return { ...mockAccount } as T
     case 'add_manual_host':
       return 'Demo-Host' as T
     case 'forget_host': {
@@ -338,6 +397,10 @@ export const api = {
   exportDiagnostics: () => invoke<string>('export_diagnostics'),
   getSettings: () => invoke<Settings>('get_settings'),
   saveSettings: (settings: Settings) => invoke<void>('save_settings', { settings }),
+  accountStatus: () => invoke<AccountStatus>('account_status'),
+  signInWithGoogle: () => invoke<AccountStatus>('sign_in_with_google'),
+  signOutAccount: () => invoke<AccountStatus>('sign_out_account'),
+  linkThisComputer: () => invoke<AccountStatus>('link_this_computer'),
   getAccessCode: () => invoke<string>('get_access_code'),
   regenerateAccessCode: () => invoke<string>('regenerate_access_code'),
   checkUpdate: () => invoke<UpdateInfo>('check_update'),

@@ -35,6 +35,15 @@ pub fn path_with_query(path: &str, query: &[(&str, String)]) -> String {
     format!("{path}?{}", encoded.join("&"))
 }
 
+/// Brackets an IPv6 literal so it can be placed in `http://{host}:{port}`.
+pub fn http_host(address: &str) -> String {
+    if address.parse::<std::net::Ipv6Addr>().is_ok() {
+        format!("[{address}]")
+    } else {
+        address.to_string()
+    }
+}
+
 /// One request to a host agent, assembled before it is signed.
 pub struct AgentRequest<'a> {
     address: &'a str,
@@ -109,11 +118,12 @@ impl<'a> AgentRequest<'a> {
             &auth::body_digest(&self.body),
         );
 
-        let address = self.address;
+        let address = self.address.to_string();
+        let host = http_host(&address);
         let mut request = http
             .request(
                 self.method.clone(),
-                format!("http://{address}:{}{target}", self.port),
+                format!("http://{host}:{}{target}", self.port),
             )
             .header(auth::TS_HEADER, ts.to_string())
             .header(auth::NONCE_HEADER, nonce)
@@ -158,11 +168,17 @@ mod tests {
     use super::*;
 
     #[test]
+    fn ipv6_hosts_are_bracketed() {
+        assert_eq!(http_host("fd7a:115c:a1e0::1"), "[fd7a:115c:a1e0::1]");
+        assert_eq!(http_host("192.168.1.10"), "192.168.1.10");
+        assert_eq!(http_host("laptop.tailnet.ts.net"), "laptop.tailnet.ts.net");
+    }
+
+    #[test]
     fn query_encoding_is_signature_safe() {
         let target = path_with_query("/files/stat", &[("path", "C:/Users/a b/x&y.bin".into())]);
         assert_eq!(
-            target,
-            "/files/stat?path=C%3A%2FUsers%2Fa%20b%2Fx%26y.bin",
+            target, "/files/stat?path=C%3A%2FUsers%2Fa%20b%2Fx%26y.bin",
             "separators and spaces must be encoded so the target cannot be re-parsed"
         );
     }

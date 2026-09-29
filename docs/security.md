@@ -70,11 +70,14 @@ remove this caveat.*
 | Pairing | Upstream certificate exchange; approval UX simplified, cryptography unchanged | Implemented |
 | Streaming transport | Encrypted by upstream Sunshine/Moonlight | Implemented |
 | Agent transport | Signed, replay-protected, throttled; **not encrypted** | Implemented |
-| Credential storage | OS secure storage — for this host's code and every remote host's code. Windows Credential Manager, macOS Keychain, and Secret Service (GNOME Keyring / KWallet) on Linux | Implemented |
+| Credential storage | OS secure storage — for this host's code, every remote host's code, and (when signed in) the Google access token, refresh token, and account email. Windows Credential Manager, macOS Keychain, and Secret Service (GNOME Keyring / KWallet) on Linux | Implemented |
+| Account sign-in | Google OIDC, PKCE, public desktop client. No client secret in the app or the repo. Client id is owner-supplied | Implemented (live Google project is owner-supplied) |
+| Device registry | Presence and private/Tailscale address candidates for the signed-in account. Bearer access token. Does not carry access codes or open a path to the host | Client implemented; hosting is owner-supplied |
+| Cross-network without LAN or Tailscale | Not implemented. Options are in [ADR 0002](adr/0002-account-based-fleet.md). Sunshine stays unexposed | *Planned* |
 | Path confinement | Network-supplied paths confined to shared folders | Implemented |
 | Upstream downloads | Origin-verified against the expected GitHub repository before an installer is written or run | Implemented |
 | Diagnostic exports | Contain no credentials, keys, tokens or clipboard contents | Implemented |
-| Internet exposure | LAN-first. Tailscale (optional) for remote access. NodeDesk does **not** silently expose the host to the public internet | Implemented |
+| Internet exposure | LAN-first. Tailscale (optional) for remote access. Account discovery publishes and dials only private or Tailscale addresses. NodeDesk does **not** silently expose the host to the public internet | Implemented |
 | Release signing | Windows/macOS binaries are **unsigned** in v1.x | *Planned* |
 | Update verification | Update check links to the release page; there is no in-place auto-update to verify yet | *Planned* |
 | Session audit log | Per-session logging of agent actions | *Planned* |
@@ -87,7 +90,9 @@ remove this caveat.*
 | Attacker guesses the access code | ~60-bit code; lockout after 10 failures | Implemented |
 | Attacker sniffs the code off the wire | The code is never transmitted; only per-request signatures are | Implemented |
 | Attacker replays a captured request | Timestamp window plus single-use nonces | Implemented |
-| Attacker reads file contents off the wire | **Not mitigated** — the agent channel is not encrypted; use Tailscale | *Planned (TLS)* |
+| Attacker reads file contents off the wire | **Not mitigated** on a shared LAN — the agent channel is not encrypted; use Tailscale. Account discovery will not aim the agent channel at a public address | *Planned (TLS)* |
+| Stolen Google refresh token used from another machine | Token is in OS secure storage; sign-out deletes it and best-effort unlinks this computer. A thief who can read the keychain is already on this machine | Implemented |
+| Registry operator learns public IPs of hosts | Client drops public addresses before register/heartbeat, and will not dial one that a registry sends back | Implemented |
 | Compromised code used to read the whole disk | Reads confined to the user's folders, writes to the incoming folder | Implemented |
 | Stolen credentials | Codes in OS secure storage; forgetting a host deletes its code, regenerating invalidates it immediately | Implemented |
 | Tampered upstream installer URL | Asset origin verified against the expected GitHub repository | Implemented |

@@ -30,7 +30,7 @@ pub struct Settings {
     pub start_on_boot: bool,
     pub clipboard_sync: bool,
     pub tailscale_enabled: bool,
-    pub codec: String,      // "auto" | "h264" | "hevc" | "av1"
+    pub codec: String, // "auto" | "h264" | "hevc" | "av1"
     pub bitrate_mbps: u32,
     pub fps: u32,
     pub resolution: String, // "auto" | "1080p" | "1440p" | "4k"
@@ -39,6 +39,18 @@ pub struct Settings {
     pub onboarded: bool,
     #[serde(default)]
     pub manual_hosts: Vec<ManualHost>,
+    /// Google OAuth desktop client id. Not a secret — a public PKCE client —
+    /// but it is owner-supplied configuration, never a value committed as the
+    /// default. `NODEDESK_GOOGLE_CLIENT_ID` overrides this when set.
+    #[serde(default)]
+    pub google_client_id: String,
+    /// Device registry base URL. `NODEDESK_REGISTRY_URL` overrides this.
+    /// `mock://local` selects the in-process stub.
+    #[serde(default)]
+    pub registry_base_url: String,
+    /// Stable id for this computer in the account registry. Not a credential.
+    #[serde(default)]
+    pub device_id: String,
     /// Access codes written by versions that kept them in this file. Read once
     /// so an upgrade can migrate them into the keychain, then never written
     /// back — hence `skip_serializing`.
@@ -61,6 +73,9 @@ impl Default for Settings {
             onboarded: false,
             manual_hosts: vec![],
             legacy_host_codes: HashMap::new(),
+            google_client_id: String::new(),
+            registry_base_url: String::new(),
+            device_id: String::new(),
         }
     }
 }
@@ -317,6 +332,20 @@ mod tests {
     }
 
     #[test]
+    fn account_fields_default_when_absent_and_tokens_are_not_settings() {
+        let text = r#"{"mode":"both","startOnBoot":true,"clipboardSync":true,
+            "tailscaleEnabled":true,"codec":"auto","bitrateMbps":40,"fps":60,
+            "resolution":"auto","hdr":false}"#;
+        let settings: Settings = serde_json::from_str(text).unwrap();
+        assert!(settings.google_client_id.is_empty());
+        assert!(settings.registry_base_url.is_empty());
+        assert!(settings.device_id.is_empty());
+        let stored = serde_json::to_string(&settings).unwrap();
+        assert!(!stored.contains("accessToken"));
+        assert!(!stored.contains("refreshToken"));
+    }
+
+    #[test]
     fn defaults_match_spec() {
         let s = Settings::default();
         assert_eq!(s.mode, "both");
@@ -329,8 +358,15 @@ mod tests {
     fn access_codes_are_unambiguous() {
         let code = random_code(ACCESS_CODE_LEN);
         assert_eq!(code.len(), ACCESS_CODE_LEN);
-        assert!(code.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit()));
-        assert!(!code.contains('0') && !code.contains('O') && !code.contains('1') && !code.contains('I'));
+        assert!(code
+            .chars()
+            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit()));
+        assert!(
+            !code.contains('0')
+                && !code.contains('O')
+                && !code.contains('1')
+                && !code.contains('I')
+        );
     }
 
     #[test]
@@ -355,7 +391,10 @@ mod tests {
         store_host_code(address, "CODE-FOR-HOST").unwrap();
         assert_eq!(host_code(address).unwrap(), "CODE-FOR-HOST");
         forget_host_code(address).unwrap();
-        assert!(host_code(address).is_none(), "forgetting must delete the code");
+        assert!(
+            host_code(address).is_none(),
+            "forgetting must delete the code"
+        );
     }
 
     #[test]
