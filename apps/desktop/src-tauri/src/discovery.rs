@@ -30,7 +30,7 @@ pub struct FoundHost {
     pub name: String,
     pub os: String,
     pub address: String,
-    pub via: String, // "lan" | "tailscale" | "manual"
+    pub via: String, // "lan" | "tailscale" | "manual" | "account"
 }
 
 /// Answers discovery beacons forever. Started once at app launch.
@@ -135,7 +135,11 @@ pub fn tailscale_peers() -> Vec<FoundHost> {
         .filter(|p| p.online)
         .filter_map(|p| {
             p.ips.first().map(|ip| FoundHost {
-                name: if p.host_name.is_empty() { ip.clone() } else { p.host_name },
+                name: if p.host_name.is_empty() {
+                    ip.clone()
+                } else {
+                    p.host_name
+                },
                 os: "unknown".into(),
                 address: ip.clone(),
                 via: "tailscale".into(),
@@ -147,12 +151,46 @@ pub fn tailscale_peers() -> Vec<FoundHost> {
 /// Quick check whether a NodeDesk agent answers at this address. Any HTTP
 /// response (even 401) proves a NodeDesk host is there.
 pub async fn agent_present(client: &reqwest::Client, address: &str) -> bool {
+    let host = crate::client::http_host(address);
     client
-        .get(format!("http://{address}:{}/metrics", agent_port()))
+        .get(format!("http://{host}:{}/metrics", agent_port()))
         .timeout(Duration::from_millis(700))
         .send()
         .await
         .is_ok()
+}
+
+/// This machine's tailnet addresses, if Tailscale is installed. Empty when it
+/// is not — account discovery must not fail closed just because the overlay
+/// is absent.
+pub fn tailscale_self_ips() -> Vec<String> {
+    let out = std::process::Command::new("tailscale")
+        .args(["status", "--json"])
+        .output();
+    let Ok(out) = out else {
+        return vec![];
+    };
+    let Ok(text) = std::str::from_utf8(&out.stdout) else {
+        return vec![];
+    };
+    parse_tailscale_self_ips(text)
+}
+
+pub fn parse_tailscale_self_ips(text: &str) -> Vec<String> {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(text) else {
+        return vec![];
+    };
+    value
+        .get("Self")
+        .and_then(|node| node.get("TailscaleIPs"))
+        .and_then(|ips| ips.as_array())
+        .map(|ips| {
+            ips.iter()
+                .filter_map(|ip| ip.as_str().map(str::to_string))
+                .filter(|ip| !ip.is_empty())
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 pub fn local_ip() -> Option<String> {
@@ -179,6 +217,17 @@ mod tests {
         let back: FoundHost = serde_json::from_str(&text).unwrap();
         assert_eq!(back.name, "AI-PC");
         assert_eq!(back.via, "lan");
+    }
+
+    #[test]
+    fn tailscale_self_ips_parse_without_the_binary() {
+        let text = r#"{"Self":{"TailscaleIPs":["100.64.0.2","fd7a:115c:a1e0::1"]},"Peer":{"nodekey:abc":{"HostName":"office"}}}"#;
+        assert_eq!(
+            parse_tailscale_self_ips(text),
+            vec!["100.64.0.2".to_string(), "fd7a:115c:a1e0::1".to_string()]
+        );
+        assert!(parse_tailscale_self_ips("not json").is_empty());
+        assert!(parse_tailscale_self_ips("{}").is_empty());
     }
 
     #[test]

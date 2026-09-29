@@ -27,6 +27,8 @@ export default function ComputerCard({
   onMessage: (msg: string, isError?: boolean) => void
 }) {
   const [busy, setBusy] = useState(false)
+  const reachable = computer.online && computer.address.trim() !== ''
+  const extraAddresses = (computer.addressCandidates ?? []).filter((address) => address && address !== computer.address)
 
   const wake = async () => {
     setBusy(true)
@@ -52,10 +54,13 @@ export default function ComputerCard({
           <span className="font-semibold">{computer.name}</span>
           <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] uppercase text-zinc-500">{computer.via}</span>
         </button>
-        <span className="font-mono text-[11px] text-zinc-600">{computer.address}</span>
+        {computer.address && <span className="font-mono text-[11px] text-zinc-600">{computer.address}</span>}
       </div>
 
       <p className="mt-1.5 text-xs text-zinc-500">{computer.specs}</p>
+      {extraAddresses.length > 0 && (
+        <p className="mt-1 text-[11px] text-zinc-500">Also at {extraAddresses.join(', ')}</p>
+      )}
 
       {computer.online && computer.cpuPct !== undefined && (
         <div className="mt-3.5 space-y-1.5">
@@ -65,34 +70,36 @@ export default function ComputerCard({
         </div>
       )}
 
-      <div className="mt-4 flex gap-2">
-        {computer.online ? (
-          <>
-            <button
-              onClick={() => onOpen(computer)}
-              className="flex-1 rounded-lg bg-emerald-500 py-2.5 text-xs font-bold tracking-widest text-zinc-950 transition-colors hover:bg-emerald-400"
-            >
-              CONNECT
-            </button>
-            {!computer.hasAccessCode && (
+      {(reachable || computer.via !== 'account' || computer.mac) && (
+        <div className="mt-4 flex gap-2">
+          {reachable ? (
+            <>
               <button
-                onClick={() => onPair(computer)}
-                className="flex items-center gap-1.5 rounded-lg border border-zinc-700 px-4 py-2.5 text-xs font-bold tracking-widest text-zinc-300 transition-colors hover:bg-zinc-800"
+                onClick={() => onOpen(computer)}
+                className="flex-1 rounded-lg bg-emerald-500 py-2.5 text-xs font-bold tracking-widest text-zinc-950 transition-colors hover:bg-emerald-400"
               >
-                <Link2 className="h-3.5 w-3.5" /> PAIR
+                CONNECT
               </button>
-            )}
-          </>
-        ) : (
-          <button
-            onClick={() => void wake()}
-            disabled={busy}
-            className="flex-1 rounded-lg border border-zinc-700 py-2.5 text-xs font-bold tracking-widest text-zinc-300 transition-colors hover:bg-zinc-800 disabled:opacity-50"
-          >
-            {busy ? 'SENDING…' : 'WAKE'}
-          </button>
-        )}
-      </div>
+              {!computer.hasAccessCode && (
+                <button
+                  onClick={() => onPair(computer)}
+                  className="flex items-center gap-1.5 rounded-lg border border-zinc-700 px-4 py-2.5 text-xs font-bold tracking-widest text-zinc-300 transition-colors hover:bg-zinc-800"
+                >
+                  <Link2 className="h-3.5 w-3.5" /> PAIR
+                </button>
+              )}
+            </>
+          ) : (
+            <button
+              onClick={() => void wake()}
+              disabled={busy}
+              className="flex-1 rounded-lg border border-zinc-700 py-2.5 text-xs font-bold tracking-widest text-zinc-300 transition-colors hover:bg-zinc-800 disabled:opacity-50"
+            >
+              {busy ? 'SENDING…' : 'WAKE'}
+            </button>
+          )}
+        </div>
+      )}
     </div>
   )
 }

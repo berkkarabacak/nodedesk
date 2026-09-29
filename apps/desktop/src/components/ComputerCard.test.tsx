@@ -130,4 +130,21 @@ describe('ComputerCard', () => {
     renderCard(offline)
     expect(screen.queryByText('CPU')).not.toBeInTheDocument()
   })
+
+  it('does not offer connect or wake for an account computer with no reachable address', () => {
+    renderCard({
+      id: 'account:cabin',
+      name: 'Cabin PC',
+      os: 'windows',
+      address: '',
+      via: 'account',
+      online: false,
+      specs: 'On your account — not reachable from this network yet',
+      hasAccessCode: false,
+    })
+    expect(screen.getByText('Cabin PC')).toBeInTheDocument()
+    expect(screen.getByText('On your account — not reachable from this network yet')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'CONNECT' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'WAKE' })).not.toBeInTheDocument()
+  })
 })

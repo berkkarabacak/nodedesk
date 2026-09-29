@@ -8,6 +8,7 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod account;
 mod agent;
 mod auth;
 mod client;
@@ -16,6 +17,7 @@ mod files;
 mod headless;
 mod monitor;
 mod moonlight;
+mod registry;
 mod release;
 mod safepath;
 mod state;
@@ -29,6 +31,7 @@ mod sim_test;
 
 use serde::Serialize;
 use state::{AppState, Settings};
+use std::collections::HashMap;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 const ACCESS_CODE_KEY: &str = "host-access-code";
@@ -78,6 +81,7 @@ struct ComputerDto {
     mac: Option<String>,
     has_access_code: bool,
     services: Vec<monitor::AiService>,
+    address_candidates: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -98,7 +102,13 @@ fn fmt_uptime(secs: u64) -> String {
     }
 }
 
-fn dto_from_metrics(m: &monitor::Metrics, address: &str, via: &str, has_code: bool) -> ComputerDto {
+fn dto_from_metrics(
+    m: &monitor::Metrics,
+    address: &str,
+    via: &str,
+    has_code: bool,
+    address_candidates: &[String],
+) -> ComputerDto {
     let specs = match &m.gpu {
         Some(g) => format!("{} · {} GB RAM", g.name, m.ram_total_gb),
         None => format!("{} GB RAM", m.ram_total_gb),
@@ -116,12 +126,47 @@ fn dto_from_metrics(m: &monitor::Metrics, address: &str, via: &str, has_code: bo
         gpu_name: m.gpu.as_ref().map(|g| g.name.clone()),
         ram_used_gb: Some(m.ram_used_gb),
         ram_total_gb: Some(m.ram_total_gb),
-        vram_used_gb: m.gpu.as_ref().map(|g| (g.vram_used_mb as f32 / 1024.0 * 10.0).round() / 10.0),
-        vram_total_gb: m.gpu.as_ref().map(|g| (g.vram_total_mb as f32 / 1024.0).round()),
+        vram_used_gb: m
+            .gpu
+            .as_ref()
+            .map(|g| (g.vram_used_mb as f32 / 1024.0 * 10.0).round() / 10.0),
+        vram_total_gb: m
+            .gpu
+            .as_ref()
+            .map(|g| (g.vram_total_mb as f32 / 1024.0).round()),
         uptime: Some(fmt_uptime(m.uptime_secs)),
         mac: m.mac.clone(),
         has_access_code: has_code,
         services: m.services.clone(),
+        address_candidates: address_candidates.to_vec(),
+    }
+}
+
+fn unreachable_account_dto(sight: &registry::AccountSighting) -> ComputerDto {
+    ComputerDto {
+        id: format!("account:{}", sight.device_id),
+        name: sight.name.clone(),
+        os: sight.os.clone(),
+        address: String::new(),
+        via: "account".into(),
+        online: false,
+        specs: if sight.registry_online {
+            "On your account — not reachable from this network yet".into()
+        } else {
+            "On your account — offline".into()
+        },
+        cpu_pct: None,
+        gpu_pct: None,
+        gpu_name: None,
+        ram_used_gb: None,
+        ram_total_gb: None,
+        vram_used_gb: None,
+        vram_total_gb: None,
+        uptime: None,
+        mac: None,
+        has_access_code: false,
+        services: vec![],
+        address_candidates: vec![],
     }
 }
 
@@ -144,14 +189,24 @@ fn get_app_info(state: State<'_, AppState>) -> AppInfo {
 }
 
 #[tauri::command]
-async fn complete_onboarding(app: AppHandle, state: State<'_, AppState>, mode: String) -> Result<(), String> {
+async fn complete_onboarding(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    mode: String,
+) -> Result<(), String> {
     {
         let mut settings = state.settings.write().map_err(|e| e.to_string())?;
         settings.mode = mode.clone();
         settings.onboarded = true;
     }
     state.save_settings();
-    set_autostart(state.settings.read().map(|s| s.start_on_boot).unwrap_or(true));
+    set_autostart(
+        state
+            .settings
+            .read()
+            .map(|s| s.start_on_boot)
+            .unwrap_or(true),
+    );
 
     if mode == "host" || mode == "both" {
         // Host capability: start agent now, bootstrap Sunshine in background.
@@ -192,7 +247,10 @@ async fn complete_onboarding(app: AppHandle, state: State<'_, AppState>, mode: S
 #[tauri::command]
 async fn bootstrap_host(app: AppHandle) -> Result<(), String> {
     // Retry path identical to the onboarding background task.
-    let _ = app.emit("bootstrap-progress", "Installing Sunshine host…".to_string());
+    let _ = app.emit(
+        "bootstrap-progress",
+        "Installing Sunshine host…".to_string(),
+    );
     let state = app.state::<AppState>();
     let tag = sunshine::ensure_installed(&state.http).await?;
     let _ = app.emit("bootstrap-progress", format!("Sunshine ready ({tag})"));
@@ -206,13 +264,14 @@ async fn bootstrap_host(app: AppHandle) -> Result<(), String> {
 async fn list_computers(state: State<'_, AppState>) -> Result<Vec<ComputerDto>, String> {
     let settings = state.settings.read().map(|s| s.clone()).unwrap_or_default();
 
-    // 1) LAN broadcast scan (blocking sockets → blocking thread).
-    let lan = tauri::async_runtime::spawn_blocking(|| discovery::scan(800))
-        .await
-        .unwrap_or_default();
+    // LAN scan and the account registry run together. A slow or absent
+    // registry must not block computers already found on the LAN.
+    let account_fut = account::remote_devices(state.http.clone(), settings.clone());
+    let lan_fut = tauri::async_runtime::spawn_blocking(|| discovery::scan(800));
+    let (sightings, lan) = tokio::join!(account_fut, lan_fut);
 
-    // 2) Tailscale peers (if any).
-    let mut candidates = lan;
+    // 1) LAN broadcast scan (blocking sockets → blocking thread).
+    let mut candidates = lan.unwrap_or_default();
     if settings.tailscale_enabled {
         for peer in discovery::tailscale_peers() {
             if !candidates.iter().any(|c| c.address == peer.address) {
@@ -233,6 +292,31 @@ async fn list_computers(state: State<'_, AppState>) -> Result<Vec<ComputerDto>, 
         }
     }
 
+    // Account devices are additive. If LAN or Tailscale already listed one of
+    // their usable addresses, keep that card. Public addresses never become
+    // a connect target.
+    let known: Vec<String> = candidates.iter().map(|host| host.address.clone()).collect();
+    let mut account_candidates: HashMap<String, Vec<String>> = HashMap::new();
+    let mut unreachable = Vec::new();
+    for sight in sightings {
+        if registry::overlaps_known(&known, &sight) {
+            continue;
+        }
+        if sight.address.is_empty() || candidates.iter().any(|host| host.address == sight.address) {
+            if sight.address.is_empty() {
+                unreachable.push(sight);
+            }
+            continue;
+        }
+        account_candidates.insert(sight.address.clone(), sight.candidates.clone());
+        candidates.push(discovery::FoundHost {
+            name: sight.name,
+            os: sight.os,
+            address: sight.address,
+            via: "account".into(),
+        });
+    }
+
     // 4) Probe agents; metrics require the stored access code.
     let mut out: Vec<ComputerDto> = vec![];
     for host in candidates {
@@ -241,9 +325,20 @@ async fn list_computers(state: State<'_, AppState>) -> Result<Vec<ComputerDto>, 
             Some(code) => fetch_metrics(&state.http, &host.address, code).await,
             None => None,
         };
-        let present = metrics.is_some() || discovery::agent_present(&state.http, &host.address).await;
+        let present =
+            metrics.is_some() || discovery::agent_present(&state.http, &host.address).await;
+        let extras = account_candidates
+            .get(&host.address)
+            .cloned()
+            .unwrap_or_default();
         match metrics {
-            Some(m) => out.push(dto_from_metrics(&m, &host.address, &host.via, true)),
+            Some(m) => out.push(dto_from_metrics(
+                &m,
+                &host.address,
+                &host.via,
+                true,
+                &extras,
+            )),
             None => {
                 let manual = settings
                     .manual_hosts
@@ -256,9 +351,13 @@ async fn list_computers(state: State<'_, AppState>) -> Result<Vec<ComputerDto>, 
                     address: host.address.clone(),
                     via: host.via.clone(),
                     online: present,
-                    specs: manual
-                        .map(|_| "Added manually".to_string())
-                        .unwrap_or_else(|| "Found on network".to_string()),
+                    specs: if host.via == "account" {
+                        "On your account".to_string()
+                    } else {
+                        manual
+                            .map(|_| "Added manually".to_string())
+                            .unwrap_or_else(|| "Found on network".to_string())
+                    },
                     cpu_pct: None,
                     gpu_pct: None,
                     gpu_name: None,
@@ -270,14 +369,22 @@ async fn list_computers(state: State<'_, AppState>) -> Result<Vec<ComputerDto>, 
                     mac: manual.and_then(|h| h.mac.clone()),
                     has_access_code: code.is_some(),
                     services: vec![],
+                    address_candidates: extras,
                 })
             }
         }
     }
+    for sight in unreachable {
+        out.push(unreachable_account_dto(&sight));
+    }
     Ok(out)
 }
 
-async fn fetch_metrics(client: &reqwest::Client, address: &str, code: &str) -> Option<monitor::Metrics> {
+async fn fetch_metrics(
+    client: &reqwest::Client,
+    address: &str,
+    code: &str,
+) -> Option<monitor::Metrics> {
     client::AgentRequest::get(address, discovery::agent_port(), "/metrics")
         .timeout(std::time::Duration::from_millis(1500))
         .send_ok(client, code)
@@ -289,7 +396,11 @@ async fn fetch_metrics(client: &reqwest::Client, address: &str, code: &str) -> O
 }
 
 #[tauri::command]
-async fn add_manual_host(state: State<'_, AppState>, address: String, code: String) -> Result<String, String> {
+async fn add_manual_host(
+    state: State<'_, AppState>,
+    address: String,
+    code: String,
+) -> Result<String, String> {
     let metrics = fetch_metrics(&state.http, &address, &code)
         .await
         .ok_or("Can't reach a NodeDesk host at that address — check the address and access code")?;
@@ -335,6 +446,9 @@ async fn pair_computer(app: AppHandle, address: String) -> Result<(), String> {
 
 #[tauri::command]
 async fn connect_computer(app: AppHandle, address: String) -> Result<(), String> {
+    if address.trim().is_empty() {
+        return Err("That computer isn't reachable from this network yet.".into());
+    }
     let state = app.state::<AppState>();
     let exe = moonlight::ensure_available(&state.http, &state.config_dir).await?;
     let settings = state.settings.read().map(|s| s.clone()).unwrap_or_default();
@@ -350,7 +464,11 @@ fn disconnect_computer(state: State<'_, AppState>) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn power_action(state: State<'_, AppState>, address: String, action: String) -> Result<(), String> {
+async fn power_action(
+    state: State<'_, AppState>,
+    address: String,
+    action: String,
+) -> Result<(), String> {
     let code = state::code_for_host(&state, &address)
         .ok_or("No access code stored for this computer — add it again with its code")?;
     // `send_ok` fails on a rejected request, so the UI cannot report a
@@ -365,12 +483,15 @@ async fn power_action(state: State<'_, AppState>, address: String, action: Strin
 
 #[tauri::command]
 fn wake_computer(state: State<'_, AppState>, address: String) -> Result<(), String> {
-    let mac = state
-        .settings
-        .read()
-        .ok()
-        .and_then(|s| s.manual_hosts.iter().find(|h| h.address == address).and_then(|h| h.mac.clone()));
-    let mac = mac.ok_or("No MAC address known for this computer — connect once while it is online, or re-add it")?;
+    let mac = state.settings.read().ok().and_then(|s| {
+        s.manual_hosts
+            .iter()
+            .find(|h| h.address == address)
+            .and_then(|h| h.mac.clone())
+    });
+    let mac = mac.ok_or(
+        "No MAC address known for this computer — connect once while it is online, or re-add it",
+    )?;
     wol::wake(&mac)
 }
 
@@ -409,12 +530,20 @@ async fn run_diagnostics(state: State<'_, AppState>) -> Result<Vec<DiagnosticsIt
         DiagnosticsItem {
             label: "Host API".into(),
             ok: api_ok,
-            detail: Some(if api_ok { "Local Sunshine API responding".into() } else { "Not reachable on this machine".into() }),
+            detail: Some(if api_ok {
+                "Local Sunshine API responding".into()
+            } else {
+                "Not reachable on this machine".into()
+            }),
         },
         DiagnosticsItem {
             label: "Controller".into(),
             ok: moonlight_ok,
-            detail: Some(if moonlight_ok { "Moonlight client ready".into() } else { "Will download on first connect".into() }),
+            detail: Some(if moonlight_ok {
+                "Moonlight client ready".into()
+            } else {
+                "Will download on first connect".into()
+            }),
         },
         DiagnosticsItem {
             label: "GPU".into(),
@@ -432,7 +561,11 @@ async fn run_diagnostics(state: State<'_, AppState>) -> Result<Vec<DiagnosticsIt
         DiagnosticsItem {
             label: "Tailscale".into(),
             ok: tailscale_installed,
-            detail: Some(if tailscale_installed { "Installed".into() } else { "Not installed (optional)".into() }),
+            detail: Some(if tailscale_installed {
+                "Installed".into()
+            } else {
+                "Not installed (optional)".into()
+            }),
         },
         DiagnosticsItem {
             label: "Virtual display".into(),
@@ -492,6 +625,27 @@ fn save_settings(state: State<'_, AppState>, settings: Settings) -> Result<(), S
 }
 
 #[tauri::command]
+fn account_status(state: State<'_, AppState>) -> account::AccountStatus {
+    let settings = state.settings.read().map(|s| s.clone()).unwrap_or_default();
+    account::status(&settings)
+}
+
+#[tauri::command]
+async fn sign_in_with_google(state: State<'_, AppState>) -> Result<account::AccountStatus, String> {
+    account::sign_in_with_google(&state).await
+}
+
+#[tauri::command]
+async fn sign_out_account(state: State<'_, AppState>) -> Result<account::AccountStatus, String> {
+    account::sign_out_account(&state).await
+}
+
+#[tauri::command]
+async fn link_this_computer(state: State<'_, AppState>) -> Result<account::AccountStatus, String> {
+    account::link_this_computer(&state).await
+}
+
+#[tauri::command]
 fn get_access_code() -> String {
     ensure_access_code()
 }
@@ -516,9 +670,13 @@ async fn check_update(state: State<'_, AppState>) -> Result<update::UpdateInfo, 
 // ---------------------------------------------------------------------------
 
 #[tauri::command]
-async fn list_files(state: State<'_, AppState>, address: String, path: String) -> Result<Vec<files::FileEntry>, String> {
-    let code = state::code_for_host(&state, &address)
-        .ok_or("No access code stored for this computer")?;
+async fn list_files(
+    state: State<'_, AppState>,
+    address: String,
+    path: String,
+) -> Result<Vec<files::FileEntry>, String> {
+    let code =
+        state::code_for_host(&state, &address).ok_or("No access code stored for this computer")?;
     client::AgentRequest::get(&address, discovery::agent_port(), "/files/list")
         .query(vec![("path", path)])
         .timeout(std::time::Duration::from_millis(3000))
@@ -551,7 +709,9 @@ async fn download_file(app: AppHandle, address: String, path: String) -> Result<
 
 #[tauri::command]
 fn cancel_transfer(state: State<'_, AppState>) {
-    state.transfer_cancel.store(true, std::sync::atomic::Ordering::SeqCst);
+    state
+        .transfer_cancel
+        .store(true, std::sync::atomic::Ordering::SeqCst);
 }
 
 #[tauri::command]
@@ -565,9 +725,14 @@ async fn enable_headless(state: State<'_, AppState>) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn terminal_exec(state: State<'_, AppState>, address: String, command: String, cwd: String) -> Result<terminal::TerminalResult, String> {
-    let code = state::code_for_host(&state, &address)
-        .ok_or("No access code stored for this computer")?;
+async fn terminal_exec(
+    state: State<'_, AppState>,
+    address: String,
+    command: String,
+    cwd: String,
+) -> Result<terminal::TerminalResult, String> {
+    let code =
+        state::code_for_host(&state, &address).ok_or("No access code stored for this computer")?;
     client::AgentRequest::post(&address, discovery::agent_port(), "/terminal")
         .json(&serde_json::json!({ "command": command, "cwd": cwd }))?
         .timeout(std::time::Duration::from_secs(35))
@@ -580,7 +745,9 @@ async fn terminal_exec(state: State<'_, AppState>, address: String, command: Str
 
 #[cfg(windows)]
 fn set_autostart(enabled: bool) {
-    let Ok(exe) = std::env::current_exe() else { return };
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
     let hkcu = winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER);
     let Ok((key, _)) = hkcu.create_subkey(r"Software\Microsoft\Windows\CurrentVersion\Run") else {
         return;
@@ -594,11 +761,15 @@ fn set_autostart(enabled: bool) {
 
 #[cfg(target_os = "linux")]
 fn set_autostart(enabled: bool) {
-    let Some(config) = dirs::config_dir() else { return };
+    let Some(config) = dirs::config_dir() else {
+        return;
+    };
     let dir = config.join("autostart");
     let file = dir.join("nodedesk.desktop");
     if enabled {
-        let Ok(exe) = std::env::current_exe() else { return };
+        let Ok(exe) = std::env::current_exe() else {
+            return;
+        };
         let _ = std::fs::create_dir_all(&dir);
         let desktop = format!(
             "[Desktop Entry]\nType=Application\nName=NodeDesk\nExec={}\nX-GNOME-Autostart-enabled=true\n",
@@ -616,7 +787,9 @@ fn set_autostart(enabled: bool) {
     let dir = home.join("Library/LaunchAgents");
     let file = dir.join("dev.nodedesk.app.plist");
     if enabled {
-        let Ok(exe) = std::env::current_exe() else { return };
+        let Ok(exe) = std::env::current_exe() else {
+            return;
+        };
         let _ = std::fs::create_dir_all(&dir);
         let plist = format!(
             "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\"><dict>\n<key>Label</key><string>dev.nodedesk.app</string>\n<key>ProgramArguments</key><array><string>{}</string></array>\n<key>RunAtLoad</key><true/>\n</dict></plist>\n",
@@ -636,11 +809,27 @@ fn main() {
                 .app_config_dir()
                 .unwrap_or_else(|_| std::path::PathBuf::from("."));
             let app_state = AppState::new(dir);
-            let onboarded = app_state.settings.read().map(|s| s.onboarded).unwrap_or(false);
-            let mode = app_state.settings.read().map(|s| s.mode.clone()).unwrap_or_default();
+            let onboarded = app_state
+                .settings
+                .read()
+                .map(|s| s.onboarded)
+                .unwrap_or(false);
+            let mode = app_state
+                .settings
+                .read()
+                .map(|s| s.mode.clone())
+                .unwrap_or_default();
             app.manage(app_state);
 
             discovery::start_responder();
+            let heartbeat = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                loop {
+                    tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                    let state = heartbeat.state::<AppState>();
+                    let _ = account::heartbeat_if_linked(&state).await;
+                }
+            });
             if onboarded && (mode == "host" || mode == "both") {
                 let code = ensure_access_code();
                 tauri::async_runtime::spawn(agent::run(code));
@@ -667,6 +856,10 @@ fn main() {
             save_settings,
             get_access_code,
             regenerate_access_code,
+            account_status,
+            sign_in_with_google,
+            sign_out_account,
+            link_this_computer,
             check_update,
             list_files,
             send_files,

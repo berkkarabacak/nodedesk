@@ -12,7 +12,7 @@ describe('computer list', () => {
       expect(c.id).toBeTruthy()
       expect(c.name).toBeTruthy()
       expect(c.address).toMatch(/^\d+\.\d+\.\d+\.\d+$/)
-      expect(['lan', 'tailscale', 'manual']).toContain(c.via)
+      expect(['lan', 'tailscale', 'manual', 'account']).toContain(c.via)
     }
   })
 
@@ -21,6 +21,28 @@ describe('computer list', () => {
     for (const c of computers.filter((c) => !c.online)) {
       expect(c.mac).toBeTruthy()
     }
+  })
+})
+
+describe('account', () => {
+  it('signs in, lists an account computer, and signs out', async () => {
+    const before = await api.accountStatus()
+    expect(before.signedIn).toBe(false)
+
+    const signedIn = await api.signInWithGoogle()
+    expect(signedIn.signedIn).toBe(true)
+    expect(signedIn.email).toContain('@')
+    expect(signedIn.linked).toBe(true)
+
+    const computers = await api.listComputers()
+    const accountComputer = computers.find((c) => c.via === 'account')
+    expect(accountComputer?.name).toBe('Travel Laptop')
+    expect(accountComputer?.addressCandidates?.length).toBeGreaterThan(0)
+
+    const signedOut = await api.signOutAccount()
+    expect(signedOut.signedIn).toBe(false)
+    const after = await api.listComputers()
+    expect(after.every((c) => c.via !== 'account')).toBe(true)
   })
 })
 

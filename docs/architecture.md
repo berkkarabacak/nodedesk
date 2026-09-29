@@ -25,8 +25,9 @@ Target: fresh PC → working remote desktop in **under 2 minutes**.
         ┌───────────────┬───────────────┼────────────────┬───────────────┐
         │               │               │                │               │
    Controller mode   Host mode      Discovery        Monitoring     File transfer
-   (Moonlight        (managed        (LAN mDNS +      (CPU/RAM/     (authenticated,
-    protocol client)  Sunshine host)  Tailscale)       GPU/VRAM)     resumable)
+   (Moonlight        (managed        (LAN,            (CPU/RAM/     (authenticated,
+    protocol client)  Sunshine host)  Tailscale,       GPU/VRAM)     resumable)
+                                      account)
         │               │               │                │               │
         └───────────────┴───────┬───────┴────────────────┴───────────────┘
                                 │
@@ -78,6 +79,8 @@ GPU/native API access, and security all argue against Electron.
 | `moonlight.rs` | Moonlight client integration: session launch, input, reconnect |
 | `networking/` (design notes) | Connection policy: LAN-first, Tailscale detection, NAT/firewall handling, reconnect strategy |
 | `discovery.rs` | Computer discovery on LAN (UDP broadcast beacon on port 47800) and tailnet (`tailscale status --json`). mDNS is planned; broadcast does not cross subnets |
+| `account.rs` | Google sign-in session. Tokens live in OS secure storage. Client id is owner-supplied configuration — see [ADR 0002](adr/0002-account-based-fleet.md) |
+| `registry.rs` | Device-registry client: register, heartbeat, list. Merges same-account computers into the dashboard. Does not open a path to the host |
 | `monitor.rs` | Hardware inventory + live CPU/RAM/GPU/VRAM (NVIDIA via nvidia-smi), AI service detection |
 | `files.rs` | Authenticated, resumable, path-confined file transfer (independent of video stream). Not encrypted - see docs/security.md |
 | `installer/` | Per-platform packaging and first-run machine configuration |

@@ -12,6 +12,9 @@ Finds your computers so you never type an IP address.
 - **LAN:** mDNS announcements + passive listening + active scan
 - **Tailnet:** enumerate tailnet peers running NodeDesk via the Tailscale
   local API (only when Tailscale is present)
+- **Account (additive):** same-account computers from a device registry, when
+  someone is signed in. Address candidates only — not a new way through the
+  firewall. See [ADR 0002](../docs/adr/0002-account-based-fleet.md)
 - Merge results into the unified computer list consumed by the dashboard:
   name, OS, online/offline, address candidates, pairing state
 - Feed the "Scan network for computers" flow in the UI

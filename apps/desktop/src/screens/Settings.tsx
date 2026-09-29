@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { ArrowLeft, ChevronDown, ChevronRight, Copy, MonitorOff, RefreshCcw } from 'lucide-react'
-import { api, type HeadlessStatus, type Settings } from '../lib/api'
+import { api, type AccountStatus, type HeadlessStatus, type Settings } from '../lib/api'
+import AccountPanel from '../components/AccountPanel'
 
 function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) {
   return (
@@ -45,8 +46,15 @@ export default function SettingsScreen({
   const [headless, setHeadless] = useState<HeadlessStatus | null>(null)
   const [headlessBusy, setHeadlessBusy] = useState(false)
   const [headlessMsg, setHeadlessMsg] = useState('')
+  const [account, setAccount] = useState<AccountStatus | null>(null)
+  const [accountBusy, setAccountBusy] = useState(false)
+  const [accountError, setAccountError] = useState('')
 
   const isHost = s.mode === 'host' || s.mode === 'both'
+
+  useEffect(() => {
+    void api.accountStatus().then(setAccount).catch((e) => setAccountError(String(e)))
+  }, [])
 
   useEffect(() => {
     if (isHost) {
@@ -54,6 +62,18 @@ export default function SettingsScreen({
       void api.headlessStatus().then(setHeadless)
     }
   }, [isHost])
+
+  const runAccount = async (action: () => Promise<AccountStatus>) => {
+    setAccountBusy(true)
+    setAccountError('')
+    try {
+      setAccount(await action())
+    } catch (e) {
+      setAccountError(String(e))
+    } finally {
+      setAccountBusy(false)
+    }
+  }
 
   const enableHeadless = async () => {
     setHeadlessBusy(true)
@@ -85,6 +105,17 @@ export default function SettingsScreen({
         <ArrowLeft className="h-4 w-4" /> Back
       </button>
       <h1 className="mt-4 text-xl font-bold">Settings</h1>
+
+      {account && (
+        <AccountPanel
+          status={account}
+          busy={accountBusy}
+          error={accountError}
+          onSignIn={() => void runAccount(() => api.signInWithGoogle())}
+          onSignOut={() => void runAccount(() => api.signOutAccount())}
+          onLink={() => void runAccount(() => api.linkThisComputer())}
+        />
+      )}
 
       {isHost && (
         <div className="mt-6 rounded-2xl border border-emerald-500/25 bg-emerald-500/5 p-5">
@@ -207,6 +238,30 @@ export default function SettingsScreen({
           <Row label="HDR streaming" hint="Requires HDR-capable host and client displays">
             <Toggle checked={s.hdr} onChange={(v) => setS({ ...s, hdr: v })} />
           </Row>
+          <label className="block text-sm">
+            <span className="text-xs text-zinc-500">Sign-in client ID</span>
+            <input
+              value={s.googleClientId ?? ''}
+              onChange={(e) => setS({ ...s, googleClientId: e.target.value })}
+              placeholder="Optional"
+              spellCheck={false}
+              className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 font-mono text-xs outline-none focus:border-emerald-500"
+            />
+            <span className="mt-1 block text-xs text-zinc-600">Provided for this installation. Not a password.</span>
+          </label>
+          <label className="block text-sm">
+            <span className="text-xs text-zinc-500">Account service address</span>
+            <input
+              value={s.registryBaseUrl ?? ''}
+              onChange={(e) => setS({ ...s, registryBaseUrl: e.target.value })}
+              placeholder="https://"
+              spellCheck={false}
+              className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 font-mono text-xs outline-none focus:border-emerald-500"
+            />
+            <span className="mt-1 block text-xs text-zinc-600">
+              Where your computers check in. Leave blank to use the installation default.
+            </span>
+          </label>
         </div>
       )}
 
