@@ -432,23 +432,145 @@ pub fn clean_pin(pin: &str) -> Option<String> {
     }
 }
 
-/// Approves a pairing PIN the controller is showing. This is the same call
-/// Sunshine's own web UI makes — NodeDesk just removes the web-UI detour.
-pub async fn approve_pin(client: &reqwest::Client, pin: &str) -> Result<(), String> {
+/// Sunshine v2026.914.233613 `pairing_id`: 32 hexadecimal characters.
+const PAIRING_ID_LEN: usize = 32;
+/// `nvhttp::is_valid_pairing_name`: 1 to 128 bytes.
+const MAX_PAIRING_NAME_BYTES: usize = 128;
+
+/// One client waiting on `GET /api/pin`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PendingPairing {
+    id: String,
+    name: String,
+}
+
+fn is_pairing_id(id: &str) -> bool {
+    id.len() == PAIRING_ID_LEN && id.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+/// Client name stored with the pair. Empty names are rejected by current
+/// Sunshine, so a missing name becomes a short placeholder.
+fn pairing_client_name(raw: &str) -> String {
+    let trimmed = raw.trim();
+    let source = if trimmed.is_empty() { "Controller" } else { trimmed };
+    let mut end = source.len().min(MAX_PAIRING_NAME_BYTES);
+    while end > 0 && !source.is_char_boundary(end) {
+        end -= 1;
+    }
+    if end == 0 {
+        "Controller".to_string()
+    } else {
+        source[..end].to_string()
+    }
+}
+
+fn parse_pending_pairings(body: &serde_json::Value) -> Vec<PendingPairing> {
+    let Some(items) = body.get("pairings").and_then(|p| p.as_array()) else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .filter_map(|item| {
+            let id = item.get("id").and_then(|v| v.as_str())?;
+            if !is_pairing_id(id) {
+                return None;
+            }
+            let name = item.get("name").and_then(|v| v.as_str()).unwrap_or("");
+            Some(PendingPairing {
+                id: id.to_string(),
+                name: pairing_client_name(name),
+            })
+        })
+        .collect()
+}
+
+/// A wrong `pairing_id` fails that client's handshake, so never guess.
+fn choose_pending_pairing(pairings: &[PendingPairing]) -> Result<PendingPairing, String> {
+    match pairings {
+        [] => Err(
+            "No computer is waiting to pair. Start pairing on the other computer, then enter the PIN it shows."
+                .into(),
+        ),
+        [only] => Ok(only.clone()),
+        many => {
+            let names = many
+                .iter()
+                .map(|p| p.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            Err(format!(
+                "More than one computer is waiting ({names}). Cancel the extra request, then approve this PIN."
+            ))
+        }
+    }
+}
+
+/// Body for current `POST /api/pin`: pairing id, four-digit PIN, and client name.
+fn pin_request_body(pin: &str, pairing: &PendingPairing) -> Result<serde_json::Value, String> {
     let clean = clean_pin(pin).ok_or("PIN must be the 4 digits shown on the other computer")?;
-    let resp = client
-        .post(format!("{}/api/pin", api_base()))
-        .header("Authorization", auth_header()?)
-        .json(&serde_json::json!({ "pin": clean }))
+    if !is_pairing_id(&pairing.id) {
+        return Err(
+            "The waiting pairing is not valid. Start pairing again on the other computer.".into(),
+        );
+    }
+    Ok(serde_json::json!({
+        "pairing_id": pairing.id,
+        "pin": clean,
+        "name": pairing_client_name(&pairing.name),
+    }))
+}
+
+/// Current Sunshine returns `{"status":true}` (a boolean). Older builds used
+/// the string `"true"`. Either one means the handshake finished.
+fn pin_response_ok(body: &serde_json::Value) -> bool {
+    match body.get("status") {
+        Some(status) if status.as_bool() == Some(true) => true,
+        Some(status) if status.as_str() == Some("true") => true,
+        _ => false,
+    }
+}
+
+/// Approves a pairing PIN the controller is showing.
+///
+/// Current Sunshine (`POST /api/pin`) rejects a PIN-only body. It needs the
+/// `pairing_id` from `GET /api/pin` plus the client name, then holds the POST
+/// open until the controller finishes the handshake.
+pub async fn approve_pin(client: &reqwest::Client, pin: &str) -> Result<(), String> {
+    // Fail before talking to the host when the typed PIN cannot be valid.
+    let _ = clean_pin(pin).ok_or("PIN must be the 4 digits shown on the other computer")?;
+    let auth = auth_header()?;
+    let base = api_base();
+
+    let listed = client
+        .get(format!("{base}/api/pin"))
+        .header("Authorization", &auth)
+        .timeout(std::time::Duration::from_secs(10))
         .send()
         .await
-        .map_err(|e| format!("cannot reach the Sunshine API: {e}"))?;
+        .map_err(|e| format!("cannot reach the host service: {e}"))?;
+    if !listed.status().is_success() {
+        return Err("The host service did not list the computer waiting to pair.".into());
+    }
+    let listed_body: serde_json::Value = listed.json().await.map_err(|e| e.to_string())?;
+    let pairing = choose_pending_pairing(&parse_pending_pairings(&listed_body))?;
+    let body = pin_request_body(pin, &pairing)?;
 
-    let body: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
-    if body.get("status").and_then(|s| s.as_str()) == Some("true") {
+    // The host keeps this request open until the other computer finishes
+    // pairing (Sunshine's ping timeout). Do not send Origin or Referer:
+    // those headers turn on the web UI's CSRF check.
+    let resp = client
+        .post(format!("{base}/api/pin"))
+        .header("Authorization", auth)
+        .json(&body)
+        .timeout(std::time::Duration::from_secs(90))
+        .send()
+        .await
+        .map_err(|e| format!("cannot reach the host service: {e}"))?;
+    let resp_body: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+    if pin_response_ok(&resp_body) {
         Ok(())
     } else {
-        Err("Sunshine rejected the PIN — check it matches the other computer".into())
+        Err("The host rejected the PIN — check it matches the other computer.".into())
     }
 }
 
@@ -547,5 +669,79 @@ mod tests {
         assert_eq!(clean_pin("123"), None);
         assert_eq!(clean_pin("12345"), None);
         assert_eq!(clean_pin("abcd"), None);
+    }
+
+    #[test]
+    fn current_pin_request_includes_pairing_id_and_name() {
+        // Shape of POST /api/pin on Sunshine v2026.914.233613. A body of
+        // `{"pin":"1234"}` is rejected before the handshake starts.
+        let pairing = PendingPairing {
+            id: "0123456789abcdef0123456789abcdef".into(),
+            name: "HD2".into(),
+        };
+        let body = pin_request_body("12 34", &pairing).unwrap();
+        assert_eq!(body["pairing_id"], "0123456789abcdef0123456789abcdef");
+        assert_eq!(body["pin"], "1234");
+        assert_eq!(body["name"], "HD2");
+        assert!(body.get("pin").is_some());
+        assert_eq!(body.as_object().unwrap().len(), 3);
+        assert!(pin_request_body("1234", &PendingPairing {
+            id: "short".into(),
+            name: "HD2".into(),
+        })
+        .is_err());
+    }
+
+    #[test]
+    fn boolean_status_true_means_the_pair_finished() {
+        // Live response is a JSON boolean, not the string "true".
+        assert!(pin_response_ok(&serde_json::json!({ "status": true })));
+        assert!(pin_response_ok(&serde_json::json!({ "status": "true" })));
+        assert!(!pin_response_ok(&serde_json::json!({ "status": false })));
+        assert!(!pin_response_ok(&serde_json::json!({ "status": "false" })));
+        assert!(!pin_response_ok(&serde_json::json!({})));
+    }
+
+    #[test]
+    fn selects_the_single_waiting_client_from_get_pin() {
+        let body = serde_json::json!({
+            "pairings": [{
+                "id": "0123456789abcdef0123456789abcdef",
+                "name": "HD2",
+                "address": "192.168.1.20"
+            }]
+        });
+        let choice = choose_pending_pairing(&parse_pending_pairings(&body)).unwrap();
+        assert_eq!(choice.id, "0123456789abcdef0123456789abcdef");
+        assert_eq!(choice.name, "HD2");
+        let posted = pin_request_body("1234", &choice).unwrap();
+        assert_eq!(posted["pairing_id"], choice.id);
+        assert_eq!(posted["name"], "HD2");
+    }
+
+    #[test]
+    fn ignores_ids_that_are_not_32_hex_digits() {
+        let body = serde_json::json!({
+            "pairings": [{ "id": "not-a-pairing-id", "name": "HD2" }]
+        });
+        assert!(parse_pending_pairings(&body).is_empty());
+        assert!(choose_pending_pairing(&[]).is_err());
+    }
+
+    #[test]
+    fn does_not_guess_when_two_clients_are_waiting() {
+        let pending = vec![
+            PendingPairing {
+                id: "0123456789abcdef0123456789abcdef".into(),
+                name: "HD2".into(),
+            },
+            PendingPairing {
+                id: "fedcba9876543210fedcba9876543210".into(),
+                name: "Other".into(),
+            },
+        ];
+        let err = choose_pending_pairing(&pending).unwrap_err();
+        assert!(err.contains("HD2"));
+        assert!(err.contains("Other"));
     }
 }

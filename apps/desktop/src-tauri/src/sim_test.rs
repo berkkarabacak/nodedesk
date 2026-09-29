@@ -14,7 +14,7 @@
 #![cfg(test)]
 
 use crate::{agent, auth, client, discovery, files, state, sunshine, terminal};
-use axum::{extract::State, response::IntoResponse, routing::post, Json, Router};
+use axum::{extract::State, response::IntoResponse, routing::get, Json, Router};
 use std::sync::mpsc;
 
 /// Starts a simulated machine: a NodeDesk agent on an ephemeral port.
@@ -29,18 +29,33 @@ async fn spawn_machine(code: &str) -> u16 {
     port
 }
 
-/// Starts a mock Sunshine API that records approved PINs.
+/// Starts a mock of Sunshine v2026.914.233613 `/api/pin`.
+/// GET lists one waiting client. POST must carry `pairing_id`, `pin`, and
+/// `name`, and succeeds with a boolean `status` (not the string `"true"`).
 async fn spawn_mock_sunshine() -> (u16, mpsc::Receiver<String>) {
     let (tx, rx) = mpsc::channel::<String>();
+    async fn list_handler() -> impl IntoResponse {
+        Json(serde_json::json!({
+            "pairings": [{
+                "id": "0123456789abcdef0123456789abcdef",
+                "name": "HD2",
+                "address": "127.0.0.1"
+            }]
+        }))
+    }
     async fn pin_handler(
         State(tx): State<mpsc::Sender<String>>,
         Json(body): Json<serde_json::Value>,
     ) -> impl IntoResponse {
-        let pin = body.get("pin").and_then(|p| p.as_str()).unwrap_or("").to_string();
-        let _ = tx.send(pin);
-        Json(serde_json::json!({ "status": "true" }))
+        let _ = tx.send(body.to_string());
+        let ok = body.get("pairing_id").and_then(|v| v.as_str()).is_some_and(|id| id.len() == 32)
+            && body.get("pin").and_then(|v| v.as_str()) == Some("1234")
+            && body.get("name").and_then(|v| v.as_str()).is_some_and(|n| !n.is_empty());
+        Json(serde_json::json!({ "status": ok }))
     }
-    let app = Router::new().route("/api/pin", post(pin_handler)).with_state(tx);
+    let app = Router::new()
+        .route("/api/pin", get(list_handler).post(pin_handler))
+        .with_state(tx);
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
     let port = listener.local_addr().unwrap().port();
     tokio::spawn(async move {
@@ -126,8 +141,14 @@ async fn two_machine_end_to_end() {
         .expect("PIN approval should succeed against mock Sunshine");
     let received = pin_rx
         .recv_timeout(std::time::Duration::from_secs(2))
-        .expect("mock Sunshine should receive the PIN");
-    assert_eq!(received, "1234", "PIN must be normalized before sending");
+        .expect("mock Sunshine should receive the pin request");
+    let received: serde_json::Value = serde_json::from_str(&received).unwrap();
+    assert_eq!(received["pin"], "1234", "PIN must be normalized before sending");
+    assert_eq!(
+        received["pairing_id"], "0123456789abcdef0123456789abcdef",
+        "current Sunshine rejects a PIN-only body"
+    );
+    assert_eq!(received["name"], "HD2");
 
     // --- 4. File transfer A → B, with a mid-transfer resume ---
     let work = std::env::temp_dir().join(format!("nodedesk-sim-files-{}", std::process::id()));
