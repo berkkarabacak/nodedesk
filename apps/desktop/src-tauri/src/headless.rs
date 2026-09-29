@@ -18,21 +18,28 @@ pub struct HeadlessStatus {
     pub display_count: u32,
 }
 
-/// Number of currently attached/active displays (best effort).
+/// Number of currently attached displays.
+///
+/// This used to spawn PowerShell and load WinForms, which flashed a console
+/// every time Settings or Diagnostics opened and reported "1" when the shell
+/// failed — so a headless machine looked like it had a monitor.
 pub fn display_count() -> u32 {
     #[cfg(windows)]
     {
-        let out = std::process::Command::new("powershell")
-            .args([
-                "-NoProfile",
-                "-Command",
-                "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Screen]::AllScreens.Count",
-            ])
-            .output();
-        if let Ok(o) = out {
-            return String::from_utf8_lossy(&o.stdout).trim().parse().unwrap_or(1);
+        #[link(name = "user32")]
+        extern "system" {
+            fn GetSystemMetrics(n_index: i32) -> i32;
         }
-        1
+        // SM_CMONITORS
+        const SM_CMONITORS: i32 = 80;
+        // SAFETY: GetSystemMetrics is a pure query; SM_CMONITORS has no
+        // output pointer and does not change process state.
+        let count = unsafe { GetSystemMetrics(SM_CMONITORS) };
+        if count < 0 {
+            0
+        } else {
+            count as u32
+        }
     }
     #[cfg(not(windows))]
     {
@@ -43,21 +50,20 @@ pub fn display_count() -> u32 {
 #[cfg(windows)]
 pub fn vdd_installed() -> bool {
     // Common install markers used by the Virtual Display Driver project.
-    let markers = [
-        r"C:\VirtualDisplayDriver",
-        r"C:\IddSampleDriver",
-    ];
+    let markers = [r"C:\VirtualDisplayDriver", r"C:\IddSampleDriver"];
     let marker_hit = markers.iter().any(|m| std::path::Path::new(m).exists());
     if marker_hit {
         return true;
     }
     // Fallback: ask the driver store.
-    std::process::Command::new("pnputil")
+    crate::procutil::hidden_command("pnputil")
         .args(["/enum-drivers"])
         .output()
         .map(|o| {
             let text = String::from_utf8_lossy(&o.stdout).to_lowercase();
-            text.contains("virtualdisplaydriver") || text.contains("iddsampledriver") || text.contains("virtual display")
+            text.contains("virtualdisplaydriver")
+                || text.contains("iddsampledriver")
+                || text.contains("virtual display")
         })
         .unwrap_or(false)
 }
@@ -128,22 +134,11 @@ pub async fn install_vdd(client: &reqwest::Client) -> Result<(), String> {
             .map_err(|e| e.to_string())?;
         std::fs::write(&installer, &bytes).map_err(|e| e.to_string())?;
 
-        // UAC prompt appears here — explicit user consent for a driver.
-        let status = std::process::Command::new("powershell")
-            .args([
-                "-NoProfile",
-                "-Command",
-                &format!(
-                    "Start-Process -FilePath '{}' -Verb RunAs -Wait",
-                    installer.to_string_lossy().replace('\'', "''")
-                ),
-            ])
-            .status()
-            .map_err(|e| e.to_string())?;
+        // One UAC prompt — the user clicked Enable headless mode. The
+        // installer window stays visible; only the helper has no console.
+        let launched = crate::procutil::run_elevated_wait(&installer, &[], false);
         let _ = std::fs::remove_file(&installer);
-        if !status.success() {
-            return Err("installer was cancelled or failed".into());
-        }
+        launched?;
     } else if zip_asset.is_some() {
         return Err(
             "This VDD release needs manual setup — download it from the link in docs/development.md and run its installer"
@@ -163,4 +158,17 @@ pub async fn install_vdd(client: &reqwest::Client) -> Result<(), String> {
 #[cfg(not(windows))]
 pub async fn install_vdd(_client: &reqwest::Client) -> Result<(), String> {
     Err("Automated virtual-display setup is Windows-only in this release".into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn display_count_does_not_require_a_shell() {
+        // Must not spawn PowerShell. Zero is a real headless result on Windows;
+        // the old shell probe substituted 1 whenever it failed.
+        let n = display_count();
+        assert!(n < 64, "implausible display count {n}");
+    }
 }

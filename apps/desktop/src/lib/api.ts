@@ -139,7 +139,14 @@ async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Listener = (payload: any) => void
 
-type NodeDeskEvent = 'pair-pin' | 'bootstrap-progress' | 'bootstrap-error' | 'bootstrap-done' | 'stream-started' | 'transfer-progress'
+type NodeDeskEvent =
+  | 'pair-pin'
+  | 'bootstrap-progress'
+  | 'bootstrap-error'
+  | 'bootstrap-done'
+  | 'stream-started'
+  | 'transfer-progress'
+  | 'host-error'
 
 export async function onEvent(event: NodeDeskEvent, cb: Listener): Promise<() => void> {
   if (isTauri) {
@@ -211,8 +218,8 @@ async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Promi
       mockOnboarded = true
       localStorage.setItem('nodedesk.onboarded', 'yes')
       if (mockSettings.mode !== 'controller') {
-        mockEmit('bootstrap-progress', 'Installing Sunshine host…')
-        setTimeout(() => mockEmit('bootstrap-progress', 'Sunshine ready (v27.0)'), 900)
+        mockEmit('bootstrap-progress', 'Installing the host service… Windows may ask once to approve it.')
+        setTimeout(() => mockEmit('bootstrap-progress', 'Host service ready (v27.0)'), 900)
         setTimeout(() => mockEmit('bootstrap-progress', 'Securing host…'), 1600)
         setTimeout(() => mockEmit('bootstrap-done', 'true'), 2300)
       } else {

@@ -4,23 +4,29 @@ Produces `NodeDesk-Setup-x64.exe`.
 
 ## Approach
 
-The MVP installer is the **Tauri NSIS bundle** (see
-`apps/desktop/src-tauri/tauri.conf.json`), extended with NSIS hooks that:
+The installer is the **Tauri NSIS bundle** (`apps/desktop/src-tauri/tauri.conf.json`).
 
-- install the application and required host components
-- deploy and configure the managed Sunshine host service
-- add required firewall rules
-- register startup behavior (per Settings)
-- trigger hardware/encoder detection on first run
-- generate the secure device identity
+It installs **per user** (`installMode: currentUser`). A per-machine install
+always raised a UAC prompt even though NodeDesk only writes HKCU autostart
+and a user config directory. The installer does not add firewall rules and
+does not install Sunshine. Those need administrator rights, so they happen
+later, only after the user chooses host mode:
 
-The user never installs Sunshine separately.
+- Sunshine's own installer runs once, with a single consent prompt. Current
+  releases are an MSI (`msiexec /i … /quiet /norestart`). Older `.exe`
+  installers still use silent `/S`. NodeDesk is not relaunched elevated.
+- The virtual display driver is a separate consent prompt, and only after
+  **Enable headless mode** in Settings.
+
+An older per-machine NodeDesk install is not replaced in place by this
+per-user package. Uninstall that copy first.
 
 ## Uninstall contract
 
-Clean uninstall removes: the app, NodeDesk-managed services, firewall rules
-added by the installer, device certificates and configuration — unless the
-user explicitly chooses to keep paired-device data.
+Uninstall removes the per-user app. The host service and the virtual display
+driver are installed separately (only after the user opts in) and are not
+removed by the NodeDesk uninstaller. Deleting the NodeDesk config folder
+removes paired-device data.
 
 ## Later
 

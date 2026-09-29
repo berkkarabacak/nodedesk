@@ -257,6 +257,7 @@ export default function DeviceDetail({ computer, onBack }: { computer: Computer;
   const [streaming, setStreaming] = useState(false)
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState<{ text: string; isError: boolean } | null>(null)
+  const [confirmForget, setConfirmForget] = useState(false)
 
   const notify = useCallback((text: string, isError = false) => {
     setMessage({ text, isError })
@@ -295,16 +296,11 @@ export default function DeviceDetail({ computer, onBack }: { computer: Computer;
   }
 
   const forget = async () => {
-    if (!window.confirm(
-      `Forget ${computer.name}? Its access code is deleted from this computer. ` +
-        'To reconnect later you will need the code again.',
-    )) {
-      return
-    }
     try {
       await api.forgetHost(computer.address)
       onBack()
     } catch (e) {
+      setConfirmForget(false)
       notify(String(e), true)
     }
   }
@@ -347,13 +343,36 @@ export default function DeviceDetail({ computer, onBack }: { computer: Computer;
           ))}
           <button
             title="Forget this computer"
-            onClick={() => void forget()}
+            onClick={() => setConfirmForget(true)}
             className="rounded-lg border border-zinc-800 p-2.5 text-zinc-400 transition-colors hover:border-red-500/50 hover:text-red-300"
           >
             <Trash2 className="h-4 w-4" />
           </button>
         </div>
       </div>
+
+      {confirmForget && (
+        <div className="mt-4 rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-100">
+          <p>
+            Forget {computer.name}? Its access code is deleted from this computer. To reconnect later you will need the
+            code again.
+          </p>
+          <div className="mt-3 flex gap-2">
+            <button
+              onClick={() => void forget()}
+              className="rounded-lg bg-red-500 px-4 py-2 text-xs font-semibold text-white hover:bg-red-400"
+            >
+              Forget
+            </button>
+            <button
+              onClick={() => setConfirmForget(false)}
+              className="rounded-lg border border-zinc-700 px-4 py-2 text-xs text-zinc-300 hover:bg-zinc-900"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
 
       {message && (
         <div

@@ -73,7 +73,7 @@ pub struct Metrics {
 /// NVIDIA metrics via nvidia-smi (present on any NVIDIA driver install).
 /// AMD/Intel GPU utilization reporting lands in a later release.
 fn nvidia_gpu() -> Option<GpuMetrics> {
-    let out = std::process::Command::new("nvidia-smi")
+    let out = crate::procutil::hidden_command("nvidia-smi")
         .args([
             "--query-gpu=name,utilization.gpu,memory.used,memory.total",
             "--format=csv,noheader,nounits",
