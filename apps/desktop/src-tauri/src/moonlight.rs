@@ -245,14 +245,57 @@ pub fn start_stream(state: &AppState, exe: PathBuf, settings: &Settings, host: &
         .spawn()
         .map_err(|e| format!("failed to start Moonlight: {e}"))?;
     let mut guard = state.stream_child.lock().map_err(|e| e.to_string())?;
+    // SESSION-06: one outgoing session at a time. Never silently overwrite a
+    // running viewer's handle — the old process would leak. Callers must end
+    // the previous session first; a stale handle is cleaned up explicitly.
+    if let Some(mut old) = guard.take() {
+        let _ = old.kill();
+        let _ = old.wait();
+    }
     *guard = Some(child);
     Ok(())
+}
+
+/// Watches the running viewer process; emits `stream-exited` with its exit
+/// status when it ends for any reason (quit, crash, kill — SESSION-11).
+/// The UI treats process exit as the end of the interim external-viewer
+/// session; it is not used as a readiness signal.
+pub fn watch_stream(app: AppHandle) {
+    std::thread::spawn(move || loop {
+        let exited = {
+            let state = app.state::<AppState>();
+            let mut guard = match state.stream_child.lock() {
+                Ok(g) => g,
+                Err(_) => return,
+            };
+            match guard.as_mut() {
+                Some(child) => match child.try_wait() {
+                    Ok(Some(status)) => {
+                        *guard = None;
+                        Some(status.success())
+                    }
+                    Ok(None) => None,
+                    Err(_) => {
+                        *guard = None;
+                        Some(false)
+                    }
+                },
+                None => return, // no active stream: stop watching
+            }
+        };
+        if let Some(success) = exited {
+            let _ = app.emit("stream-exited", success);
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    });
 }
 
 pub fn stop_stream(state: &AppState) {
     if let Ok(mut guard) = state.stream_child.lock() {
         if let Some(mut child) = guard.take() {
             let _ = child.kill();
+            let _ = child.wait();
         }
     }
 }

@@ -1,17 +1,16 @@
+@import './styles/tokens.css';
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  color-scheme: dark;
+body {
+  @apply bg-nd-bg text-nd-text font-nd;
+  user-select: none;
 }
 
-body {
-  @apply bg-zinc-950 text-zinc-100;
-  font-family:
-    'Segoe UI',
-    system-ui,
-    -apple-system,
-    sans-serif;
-  user-select: none;
+/* Visible keyboard focus everywhere (ACCESS-01). */
+:focus-visible {
+  outline: 2px solid var(--nd-focus);
+  outline-offset: 2px;
 }

@@ -39,6 +39,17 @@ pub struct Settings {
     pub onboarded: bool,
     #[serde(default)]
     pub manual_hosts: Vec<ManualHost>,
+    /// UI redesign additions (SPEC §08: additive migration, safe defaults).
+    #[serde(default = "default_theme")]
+    pub theme: String, // "light" | "dark"
+    #[serde(default = "default_quality_preset")]
+    pub quality_preset: String, // "auto" | "speed" | "balanced" | "quality"
+    #[serde(default)]
+    pub unattended_access: bool,
+    #[serde(default)]
+    pub local_mode: bool,
+    #[serde(default = "default_stay_signed_in")]
+    pub stay_signed_in: bool,
     /// Access codes written by versions that kept them in this file. Read once
     /// so an upgrade can migrate them into the keychain, then never written
     /// back — hence `skip_serializing`.
@@ -60,9 +71,26 @@ impl Default for Settings {
             hdr: false,
             onboarded: false,
             manual_hosts: vec![],
+            theme: default_theme(),
+            quality_preset: default_quality_preset(),
+            unattended_access: false,
+            local_mode: false,
+            stay_signed_in: true,
             legacy_host_codes: HashMap::new(),
         }
     }
+}
+
+fn default_theme() -> String {
+    "light".into()
+}
+
+fn default_quality_preset() -> String {
+    "auto".into()
+}
+
+fn default_stay_signed_in() -> bool {
+    true
 }
 
 pub struct AppState {
@@ -73,6 +101,10 @@ pub struct AppState {
     pub http_local: reqwest::Client,
     /// Running Moonlight stream process, if we started one.
     pub stream_child: Mutex<Option<std::process::Child>>,
+    /// NodeDesk clipboard channel toggle for the active session (TOOLBAR-05).
+    pub session_clipboard: Mutex<bool>,
+    /// M7 transfer queue: per-transfer IDs and independent cancellation.
+    pub transfers: std::sync::Arc<crate::files_queue::TransferQueue>,
     /// Cancellation flag for the active file transfer.
     pub transfer_cancel: std::sync::atomic::AtomicBool,
 }
@@ -96,6 +128,8 @@ impl AppState {
             http,
             http_local,
             stream_child: Mutex::new(None),
+            session_clipboard: Mutex::new(false),
+            transfers: std::sync::Arc::new(crate::files_queue::TransferQueue::new()),
             transfer_cancel: std::sync::atomic::AtomicBool::new(false),
         };
         state.migrate_host_codes();
