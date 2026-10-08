@@ -527,6 +527,8 @@ async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Promi
     }
     case 'list_transfers':
       return [...mockTransfers.values()].map((t) => ({ ...t })) as T
+    case 'agent_cert_fingerprint':
+      return 'a1b2c3d4e5f6'.padEnd(64, '0') as T
     case 'headless_status':
       return { supported: true, vddInstalled: false, displayCount: 1 } as T
     case 'enable_headless':
@@ -807,6 +809,8 @@ export const api = {
   terminalExec: (address: string, command: string, cwd: string) =>
     invoke<TerminalResult>('terminal_exec', { address, command, cwd }),
   headlessStatus: () => invoke<HeadlessStatus>('headless_status'),
+  /** Local agent TLS fingerprint (SHA-256, hex) for out-of-band verification. */
+  agentCertFingerprint: () => invoke<string>('agent_cert_fingerprint'),
   enableHeadless: () => invoke<void>('enable_headless'),
   // Account lifecycle (native google_auth module; simulated in preview).
   getAuthState: () => invoke<AuthState>('auth_get_state'),

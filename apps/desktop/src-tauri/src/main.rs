@@ -23,6 +23,7 @@ mod safepath;
 mod state;
 mod sunshine;
 mod terminal;
+mod tls;
 mod update;
 mod wol;
 
@@ -158,7 +159,8 @@ async fn complete_onboarding(app: AppHandle, state: State<'_, AppState>, mode: S
     if mode == "host" || mode == "both" {
         // Host capability: start agent now, bootstrap Sunshine in background.
         let code = ensure_access_code();
-        tauri::async_runtime::spawn(agent::run(code));
+        let identity = tls::load_or_create(&state.config_dir)?;
+        tauri::async_runtime::spawn(agent::run(code, identity));
         let app2 = app.clone();
         tauri::async_runtime::spawn(async move {
             let _ = app2.emit("bootstrap-progress", "Installing Sunshine host…");
@@ -314,6 +316,7 @@ async fn add_manual_host(state: State<'_, AppState>, address: String, code: Stri
 #[tauri::command]
 fn forget_host(state: State<'_, AppState>, address: String) -> Result<(), String> {
     state::forget_host_code(&address)?;
+    client::clear_pinned_cert(&address, discovery::agent_port());
     {
         let mut settings = state.settings.write().map_err(|e| e.to_string())?;
         settings.manual_hosts.retain(|h| h.address != address);
@@ -768,6 +771,13 @@ fn list_transfers(state: State<'_, AppState>) -> Vec<serde_json::Value> {
     state.transfers.snapshots()
 }
 
+/// The local agent TLS certificate fingerprint, for out-of-band verification
+/// against a controller's pinned value (SECURITY-03).
+#[tauri::command]
+fn agent_cert_fingerprint(state: State<'_, AppState>) -> Result<String, String> {
+    Ok(tls::load_or_create(&state.config_dir)?.fingerprint)
+}
+
 #[tauri::command]
 fn headless_status() -> headless::HeadlessStatus {
     headless::status()
@@ -843,6 +853,7 @@ fn set_autostart(enabled: bool) {
 }
 
 fn main() {
+    tls::ensure_crypto_provider();
     tauri::Builder::default()
         .setup(|app| {
             let dir = app
@@ -858,7 +869,11 @@ fn main() {
             discovery::start_responder();
             if onboarded && (mode == "host" || mode == "both") {
                 let code = ensure_access_code();
-                tauri::async_runtime::spawn(agent::run(code));
+                // The agent channel is TLS-encrypted (SECURITY-03); identity
+                // is persistent so pinned controllers survive restarts.
+                if let Ok(identity) = tls::load_or_create(&dir) {
+                    tauri::async_runtime::spawn(agent::run(code, identity));
+                }
             }
             Ok(())
         })
@@ -889,6 +904,7 @@ fn main() {
             cancel_transfer,
             retry_transfer,
             list_transfers,
+            agent_cert_fingerprint,
             terminal_exec,
             headless_status,
             enable_headless,

@@ -28,14 +28,23 @@ pub struct AgentCtx {
     access_code: RwLock<String>,
     replay: ReplayGuard,
     throttle: Throttle,
+    /// Public TLS certificate PEM served to HMAC-signed clients so they can
+    /// pin it (SECURITY-03). None in plain-router unit tests.
+    cert_pem: Option<String>,
 }
 
 impl AgentCtx {
+    #[cfg(test)]
     pub fn new(access_code: String) -> Self {
+        Self::with_identity(access_code, None)
+    }
+
+    pub fn with_identity(access_code: String, cert_pem: Option<String>) -> Self {
         Self {
             access_code: RwLock::new(access_code),
             replay: ReplayGuard::default(),
             throttle: Throttle::default(),
+            cert_pem,
         }
     }
 
@@ -373,9 +382,19 @@ async fn terminal_exec(
     }
 }
 
+/// The public certificate, so a signed controller can pin it (TOFU). The
+/// signature authenticates this exchange; the cert itself is not secret.
+async fn agent_cert(State(ctx): State<Arc<AgentCtx>>) -> impl IntoResponse {
+    match &ctx.cert_pem {
+        Some(pem) => pem.clone().into_response(),
+        None => (StatusCode::NOT_FOUND, "no certificate").into_response(),
+    }
+}
+
 /// Router with all agent routes (extracted for integration tests).
 pub fn router(ctx: Arc<AgentCtx>) -> Router {
     Router::new()
+        .route("/agent/cert", get(agent_cert))
         .route("/metrics", get(metrics))
         .route("/power", post(power))
         .route("/files/list", get(files_list))
@@ -388,25 +407,30 @@ pub fn router(ctx: Arc<AgentCtx>) -> Router {
         .with_state(ctx)
 }
 
-/// Starts the agent on the configured port. Runs for the app's lifetime.
-pub async fn run(access_code: String) {
-    run_on(crate::discovery::agent_port(), access_code).await
+/// Starts the agent on the configured port over TLS. Runs for the app's
+/// lifetime; `identity` is the device's persistent self-signed certificate.
+pub async fn run(access_code: String, identity: crate::tls::TlsIdentity) {
+    run_on(crate::discovery::agent_port(), access_code, identity).await
 }
 
 /// Port-parameterized so tests can run simulated machines side by side.
-pub async fn run_on(port: u16, access_code: String) {
-    let ctx = Arc::new(AgentCtx::new(access_code));
+pub async fn run_on(port: u16, access_code: String, identity: crate::tls::TlsIdentity) {
+    let ctx = Arc::new(AgentCtx::with_identity(access_code, Some(identity.cert_pem.clone())));
     register(&ctx);
-    let listener = match tokio::net::TcpListener::bind(("0.0.0.0", port)).await {
-        Ok(l) => l,
-        Err(_) => return, // another instance is already serving
+    let addr = std::net::SocketAddr::from(([0, 0, 0, 0], port));
+    let tls_config = match axum_server::tls_rustls::RustlsConfig::from_pem(
+        identity.cert_pem.as_bytes().to_vec(),
+        identity.key_pem.as_bytes().to_vec(),
+    )
+    .await
+    {
+        Ok(c) => c,
+        Err(_) => return, // cannot serve without a valid identity
     };
     // ConnectInfo carries the peer address the throttle keys on.
-    let _ = axum::serve(
-        listener,
-        router(ctx).into_make_service_with_connect_info::<SocketAddr>(),
-    )
-    .await;
+    let _ = axum_server::bind_rustls(addr, tls_config)
+        .serve(router(ctx).into_make_service_with_connect_info::<SocketAddr>())
+        .await;
 }
 
 #[cfg(test)]

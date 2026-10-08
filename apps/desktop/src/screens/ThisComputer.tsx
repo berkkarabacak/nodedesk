@@ -22,6 +22,7 @@ export default function ThisComputer({
   const [infoError, setInfoError] = useState(false)
   const [accessCode, setAccessCode] = useState('')
   const [identity, setIdentity] = useState<DeviceIdentity | null>(null)
+  const [fingerprint, setFingerprint] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
   const [setup, setSetup] = useState<'idle' | 'working' | 'done' | 'error'>('idle')
   const [setupMsg, setSetupMsg] = useState('')
@@ -50,6 +51,10 @@ export default function ThisComputer({
     void api
       .getAccessCode()
       .then(setAccessCode)
+      .catch(() => {})
+    void api
+      .agentCertFingerprint()
+      .then(setFingerprint)
       .catch(() => {})
     let unDone: (() => void) | undefined
     let unProg: (() => void) | undefined
@@ -144,6 +149,14 @@ export default function ThisComputer({
         <FieldRow label="Device name">
           <span className="text-sm font-semibold">{identity?.name ?? info?.hostName ?? '…'}</span>
         </FieldRow>
+        {fingerprint && (
+          <FieldRow
+            label="Security fingerprint"
+            hint="Compare this on your other computer the first time it connects — they must match."
+          >
+            <span className="max-w-56 break-all font-mono text-xs text-nd-dim">{fingerprint}</span>
+          </FieldRow>
+        )}
         {signedIn && identity?.enrolled && identity.publicId && (
           <FieldRow label="Device ID" hint="Share this so your other devices — or someone helping you — can find this computer.">
             <span className="flex items-center gap-2">

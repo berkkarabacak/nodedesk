@@ -54,14 +54,15 @@ before they reach the filesystem: reads to the user's own folders, writes to
 the incoming-transfer folder only. Traversal (`..`, mixed separators, symlinks
 pointing outward) is rejected.
 
-**What the agent channel does _not_ do.** Its payloads are **not encrypted**.
-The signature proves who sent a request and that it was not altered, but an
-observer on the same LAN segment can read file contents in transit and see
-which commands are run. Treat the agent channel as authenticated and
-tamper-evident, not confidential. For confidentiality across an untrusted
-network, run NodeDesk over Tailscale, which encrypts the path end to end.
-*Planned: TLS with per-device certificates on the agent channel, which would
-remove this caveat.*
+**Encryption (added in the UI-redesign series).** The agent channel runs over
+TLS with a per-device self-signed certificate. Controllers pin the host's
+certificate on first contact; the pinning exchange itself is HMAC-signed, so
+a network attacker cannot substitute a certificate without knowing the access
+code. Hostname verification is intentionally off — the pinned key is the
+identity — and each device's SHA-256 fingerprint is shown in This Computer
+for out-of-band verification. Forgetting a host also drops its pinned
+certificate. Payloads (files, clipboard, terminal output) are therefore
+confidential in transit; HMAC continues to authenticate every request on top.
 
 ## Mechanisms
 
@@ -69,7 +70,7 @@ remove this caveat.*
 |---|---|---|
 | Pairing | Upstream certificate exchange; approval UX simplified, cryptography unchanged | Implemented |
 | Streaming transport | Encrypted by upstream Sunshine/Moonlight | Implemented |
-| Agent transport | Signed, replay-protected, throttled; **not encrypted** | Implemented |
+| Agent transport | TLS with pinned per-device certificates; signed, replay-protected, throttled | Implemented |
 | Credential storage | OS secure storage — for this host's code and every remote host's code. Windows Credential Manager, macOS Keychain, and Secret Service (GNOME Keyring / KWallet) on Linux | Implemented |
 | Path confinement | Network-supplied paths confined to shared folders | Implemented |
 | Upstream downloads | Origin-verified against the expected GitHub repository before an installer is written or run | Implemented |
@@ -87,7 +88,7 @@ remove this caveat.*
 | Attacker guesses the access code | ~60-bit code; lockout after 10 failures | Implemented |
 | Attacker sniffs the code off the wire | The code is never transmitted; only per-request signatures are | Implemented |
 | Attacker replays a captured request | Timestamp window plus single-use nonces | Implemented |
-| Attacker reads file contents off the wire | **Not mitigated** — the agent channel is not encrypted; use Tailscale | *Planned (TLS)* |
+| Attacker reads file contents off the wire | TLS on the agent channel; pinned per-device certificates | Implemented |
 | Compromised code used to read the whole disk | Reads confined to the user's folders, writes to the incoming folder | Implemented |
 | Stolen credentials | Codes in OS secure storage; forgetting a host deletes its code, regenerating invalidates it immediately | Implemented |
 | Tampered upstream installer URL | Asset origin verified against the expected GitHub repository | Implemented |
