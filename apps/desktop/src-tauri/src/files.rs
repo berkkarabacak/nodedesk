@@ -16,6 +16,7 @@ use std::time::Duration;
 
 use crate::client;
 use crate::safepath;
+#[cfg(test)]
 use crate::state::AppState;
 
 const CHUNK: usize = 2 * 1024 * 1024; // 2 MiB
@@ -41,6 +42,8 @@ pub enum StatError {
     Denied(String),
 }
 
+/// Legacy single-shot engine, kept for the simulated two-machine test only.
+#[cfg(test)]
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct TransferProgress {
@@ -144,11 +147,13 @@ pub fn download_dir() -> Option<PathBuf> {
 // Client-side transfers (called via Tauri commands)
 // ---------------------------------------------------------------------------
 
+#[cfg(test)]
 fn code_for(state: &AppState, address: &str) -> Result<String, String> {
     crate::state::code_for_host(state, address)
         .ok_or_else(|| "No access code stored for this computer — add it with its code first".into())
 }
 
+#[cfg(test)]
 fn cancelled(state: &AppState) -> bool {
     state.transfer_cancel.load(Ordering::SeqCst)
 }
@@ -338,6 +343,7 @@ pub async fn download_transfer(
 
 /// Sends local files to a host's incoming folder, resuming partial uploads.
 /// `emit` receives progress updates (the command layer forwards them to the UI).
+#[cfg(test)]
 pub async fn send_files(
     state: &AppState,
     address: &str,
@@ -409,6 +415,7 @@ pub async fn send_files(
 }
 
 /// Downloads a remote file into ~/Downloads/NodeDesk, resuming partial files.
+#[cfg(test)]
 pub async fn download_file(
     state: &AppState,
     address: &str,

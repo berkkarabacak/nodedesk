@@ -654,7 +654,7 @@ async fn send_files(
             on_conflict: on_conflict.clone().unwrap_or_else(|| "keep-both".into()),
             cancel: Default::default(),
             done: Default::default(),
-            state: std::sync::Mutex::new("queued".into()),
+            state: std::sync::Arc::new(std::sync::Mutex::new("queued".into())),
         });
         ids.push(transfer.id.clone());
         let app2 = app.clone();
@@ -696,7 +696,7 @@ async fn download_file(
         on_conflict: on_conflict.unwrap_or_else(|| "keep-both".into()),
         cancel: Default::default(),
         done: Default::default(),
-        state: std::sync::Mutex::new("queued".into()),
+        state: std::sync::Arc::new(std::sync::Mutex::new("queued".into())),
     });
     let id = transfer.id.clone();
     let app2 = app.clone();
