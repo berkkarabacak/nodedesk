@@ -35,6 +35,7 @@ async fn spawn_machine(code: &str) -> u16 {
     let ctx = std::sync::Arc::new(agent::AgentCtx::with_identity(
         code.to_string(),
         Some(identity.cert_pem.clone()),
+        None,
     ));
     tokio::spawn(async move {
         let _ = axum_server::from_tcp_rustls(listener, tls_config)

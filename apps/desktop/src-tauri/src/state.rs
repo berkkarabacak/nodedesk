@@ -105,6 +105,11 @@ pub struct AppState {
     pub session_clipboard: Mutex<bool>,
     /// M7 transfer queue: per-transfer IDs and independent cancellation.
     pub transfers: std::sync::Arc<crate::files_queue::TransferQueue>,
+    /// Active session grants issued on this host (APPROVAL-05/06).
+    pub grants: std::sync::Arc<crate::grants::GrantStore>,
+    /// Controller side: host address -> grant token (request ID) for the
+    /// active outgoing session.
+    pub session_grants: Mutex<std::collections::HashMap<String, String>>,
     /// Cancellation flag for the active file transfer.
     pub transfer_cancel: std::sync::atomic::AtomicBool,
 }
@@ -130,6 +135,8 @@ impl AppState {
             stream_child: Mutex::new(None),
             session_clipboard: Mutex::new(false),
             transfers: std::sync::Arc::new(crate::files_queue::TransferQueue::new()),
+            grants: std::sync::Arc::new(crate::grants::GrantStore::new()),
+            session_grants: Mutex::new(std::collections::HashMap::new()),
             transfer_cancel: std::sync::atomic::AtomicBool::new(false),
         };
         state.migrate_host_codes();

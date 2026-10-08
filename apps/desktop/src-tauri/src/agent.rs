@@ -31,20 +31,27 @@ pub struct AgentCtx {
     /// Public TLS certificate PEM served to HMAC-signed clients so they can
     /// pin it (SECURITY-03). None in plain-router unit tests.
     cert_pem: Option<String>,
+    /// Active session grants; None in unit tests (legacy semantics only).
+    grants: Option<std::sync::Arc<crate::grants::GrantStore>>,
 }
 
 impl AgentCtx {
     #[cfg(test)]
     pub fn new(access_code: String) -> Self {
-        Self::with_identity(access_code, None)
+        Self::with_identity(access_code, None, None)
     }
 
-    pub fn with_identity(access_code: String, cert_pem: Option<String>) -> Self {
+    pub fn with_identity(
+        access_code: String,
+        cert_pem: Option<String>,
+        grants: Option<std::sync::Arc<crate::grants::GrantStore>>,
+    ) -> Self {
         Self {
             access_code: RwLock::new(access_code),
             replay: ReplayGuard::default(),
             throttle: Throttle::default(),
             cert_pem,
+            grants,
         }
     }
 
@@ -80,6 +87,9 @@ fn register(ctx: &Arc<AgentCtx>) {
 enum Denied {
     Throttled,
     Unauthorized,
+    /// Authenticated, but the presented session grant does not cover this
+    /// capability (APPROVAL-05/06).
+    Forbidden,
 }
 
 impl IntoResponse for Denied {
@@ -89,7 +99,39 @@ impl IntoResponse for Denied {
             // nothing about whether the code was close.
             Denied::Throttled => (StatusCode::TOO_MANY_REQUESTS, "too many attempts").into_response(),
             Denied::Unauthorized => StatusCode::UNAUTHORIZED.into_response(),
+            Denied::Forbidden => (
+                StatusCode::FORBIDDEN,
+                "the host did not permit that capability for this session",
+            )
+                .into_response(),
         }
+    }
+}
+
+/// After a valid signature: if the request carries a session grant token it
+/// is enforced — a view-only session cannot pull files or run commands no
+/// matter what its client claims. No header = legacy access-code semantics.
+fn grant_allows(ctx: &AgentCtx, headers: &HeaderMap, capability: &str) -> Result<(), Denied> {
+    let Some(token) = headers.get(crate::grants::GRANT_HEADER).and_then(|v| v.to_str().ok()) else {
+        return Ok(());
+    };
+    let Some(grants) = &ctx.grants else {
+        return Ok(()); // unit-test context without a grant store
+    };
+    let Some(perms) = grants.permissions(token) else {
+        return Err(Denied::Forbidden);
+    };
+    let allowed = match capability {
+        "control" => perms.control,
+        "files" => perms.files,
+        "clipboard" => perms.clipboard,
+        "audio" => perms.audio, // no agent audio endpoint yet; enforced for completeness
+        _ => true,              // metrics/cert: any valid grant may observe
+    };
+    if allowed {
+        Ok(())
+    } else {
+        Err(Denied::Forbidden)
     }
 }
 
@@ -102,6 +144,7 @@ fn authorize(
     uri: &Uri,
     headers: &HeaderMap,
     body: &[u8],
+    capability: &str,
 ) -> Result<(), Denied> {
     if !ctx.throttle.allowed(peer) {
         return Err(Denied::Throttled);
@@ -151,7 +194,7 @@ fn authorize(
     }
 
     ctx.throttle.record_success(peer);
-    Ok(())
+    grant_allows(ctx, headers, capability)
 }
 
 fn peer_id(addr: Option<ConnectInfo<SocketAddr>>) -> String {
@@ -160,8 +203,8 @@ fn peer_id(addr: Option<ConnectInfo<SocketAddr>>) -> String {
 }
 
 macro_rules! auth {
-    ($ctx:expr, $peer:expr, $method:expr, $uri:expr, $headers:expr, $body:expr) => {
-        if let Err(denied) = authorize(&$ctx, &$peer, &$method, &$uri, &$headers, $body) {
+    ($ctx:expr, $peer:expr, $method:expr, $uri:expr, $headers:expr, $body:expr, $cap:expr) => {
+        if let Err(denied) = authorize(&$ctx, &$peer, &$method, &$uri, &$headers, $body, $cap) {
             return denied.into_response();
         }
     };
@@ -175,7 +218,7 @@ async fn metrics(
     headers: HeaderMap,
 ) -> impl IntoResponse {
     let peer = peer_id(addr);
-    auth!(ctx, peer, method, uri, headers, b"");
+    auth!(ctx, peer, method, uri, headers, b"", "metrics");
     // `collect` samples the CPU over ~120ms and probes local ports; doing that
     // on a runtime worker would stall every other request.
     match tokio::task::spawn_blocking(monitor::collect).await {
@@ -198,7 +241,7 @@ async fn power(
     body: Bytes,
 ) -> impl IntoResponse {
     let peer = peer_id(addr);
-    auth!(ctx, peer, method, uri, headers, &body);
+    auth!(ctx, peer, method, uri, headers, &body, "control");
     let Ok(request) = serde_json::from_slice::<PowerRequest>(&body) else {
         return (StatusCode::BAD_REQUEST, "malformed request").into_response();
     };
@@ -274,7 +317,7 @@ async fn files_list(
     Query(q): Query<PathQuery>,
 ) -> impl IntoResponse {
     let peer = peer_id(addr);
-    auth!(ctx, peer, method, uri, headers, b"");
+    auth!(ctx, peer, method, uri, headers, b"", "files");
     match files::list_dir(q.path.as_deref().unwrap_or("")) {
         Ok(entries) => Json(entries).into_response(),
         Err(e) => (StatusCode::BAD_REQUEST, e).into_response(),
@@ -290,7 +333,7 @@ async fn files_stat(
     Query(q): Query<PathQuery>,
 ) -> impl IntoResponse {
     let peer = peer_id(addr);
-    auth!(ctx, peer, method, uri, headers, b"");
+    auth!(ctx, peer, method, uri, headers, b"", "files");
     let Some(path) = q.path else {
         return (StatusCode::BAD_REQUEST, "missing path").into_response();
     };
@@ -318,7 +361,7 @@ async fn files_download(
     Query(q): Query<DownloadQuery>,
 ) -> impl IntoResponse {
     let peer = peer_id(addr);
-    auth!(ctx, peer, method, uri, headers, b"");
+    auth!(ctx, peer, method, uri, headers, b"", "files");
     match files::read_from(&q.path, q.offset.unwrap_or(0)) {
         Ok(bytes) => bytes.into_response(),
         Err(e) => (StatusCode::BAD_REQUEST, e).into_response(),
@@ -341,7 +384,7 @@ async fn files_upload(
     body: Bytes,
 ) -> impl IntoResponse {
     let peer = peer_id(addr);
-    auth!(ctx, peer, method, uri, headers, &body);
+    auth!(ctx, peer, method, uri, headers, &body, "files");
     match files::write_at(&q.path, q.offset.unwrap_or(0), &body) {
         Ok(size) => Json(serde_json::json!({ "size": size })).into_response(),
         Err(e) => (StatusCode::BAD_REQUEST, e).into_response(),
@@ -367,7 +410,7 @@ async fn terminal_exec(
     body: Bytes,
 ) -> impl IntoResponse {
     let peer = peer_id(addr);
-    auth!(ctx, peer, method, uri, headers, &body);
+    auth!(ctx, peer, method, uri, headers, &body, "control");
     let Ok(request) = serde_json::from_slice::<TerminalRequest>(&body) else {
         return (StatusCode::BAD_REQUEST, "malformed request").into_response();
     };
@@ -384,7 +427,17 @@ async fn terminal_exec(
 
 /// The public certificate, so a signed controller can pin it (TOFU). The
 /// signature authenticates this exchange; the cert itself is not secret.
-async fn agent_cert(State(ctx): State<Arc<AgentCtx>>) -> impl IntoResponse {
+async fn agent_cert(
+    State(ctx): State<Arc<AgentCtx>>,
+    addr: Option<ConnectInfo<SocketAddr>>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    // The pinning exchange is HMAC-signed like everything else — otherwise a
+    // network attacker could substitute their own certificate on first contact.
+    let peer = peer_id(addr);
+    auth!(ctx, peer, method, uri, headers, b"", "metrics");
     match &ctx.cert_pem {
         Some(pem) => pem.clone().into_response(),
         None => (StatusCode::NOT_FOUND, "no certificate").into_response(),
@@ -409,13 +462,26 @@ pub fn router(ctx: Arc<AgentCtx>) -> Router {
 
 /// Starts the agent on the configured port over TLS. Runs for the app's
 /// lifetime; `identity` is the device's persistent self-signed certificate.
-pub async fn run(access_code: String, identity: crate::tls::TlsIdentity) {
-    run_on(crate::discovery::agent_port(), access_code, identity).await
+pub async fn run(
+    access_code: String,
+    identity: crate::tls::TlsIdentity,
+    grants: std::sync::Arc<crate::grants::GrantStore>,
+) {
+    run_on(crate::discovery::agent_port(), access_code, identity, grants).await
 }
 
 /// Port-parameterized so tests can run simulated machines side by side.
-pub async fn run_on(port: u16, access_code: String, identity: crate::tls::TlsIdentity) {
-    let ctx = Arc::new(AgentCtx::with_identity(access_code, Some(identity.cert_pem.clone())));
+pub async fn run_on(
+    port: u16,
+    access_code: String,
+    identity: crate::tls::TlsIdentity,
+    grants: std::sync::Arc<crate::grants::GrantStore>,
+) {
+    let ctx = Arc::new(AgentCtx::with_identity(
+        access_code,
+        Some(identity.cert_pem.clone()),
+        Some(grants),
+    ));
     register(&ctx);
     let addr = std::net::SocketAddr::from(([0, 0, 0, 0], port));
     let tls_config = match axum_server::tls_rustls::RustlsConfig::from_pem(
@@ -464,6 +530,70 @@ mod tests {
 
     fn authed(uri: &str) -> Request<Body> {
         signed(CODE, "GET", uri, b"")
+    }
+
+    /// APPROVAL-05/06: a session grant enforces exactly its approved
+    /// capabilities on the native endpoints — a view-only grant cannot pull
+    /// files, and a forged token gets nothing.
+    #[tokio::test]
+    async fn grant_permissions_are_enforced_on_endpoints() {
+        let store = std::sync::Arc::new(crate::grants::GrantStore::new());
+        store.issue(
+            "req-viewonly",
+            "dev-helper",
+            crate::grants::Permissions {
+                control: false,
+                files: false,
+                clipboard: false,
+                audio: false,
+            },
+        );
+        let ctx = Arc::new(AgentCtx::with_identity(CODE.into(), None, Some(store.clone())));
+        let with_grant = |uri: &str, token: &str| {
+            let req = signed(CODE, "GET", uri, b"");
+            let (mut parts, body) = req.into_parts();
+            parts.headers.insert(crate::grants::GRANT_HEADER, token.parse().unwrap());
+            Request::from_parts(parts, body)
+        };
+
+        // Metrics is observable with any valid grant.
+        let resp = router(ctx.clone())
+            .oneshot(with_grant("/metrics", "req-viewonly"))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        // Files requires the files capability the host did NOT grant.
+        let resp = router(ctx.clone())
+            .oneshot(with_grant("/files/list?path=", "req-viewonly"))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+        // A forged token gets nothing at all.
+        let resp = router(ctx)
+            .oneshot(with_grant("/metrics", "forged-token"))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+        // Granting files flips the file endpoint to allowed.
+        store.issue(
+            "req-files",
+            "dev-helper",
+            crate::grants::Permissions {
+                control: false,
+                files: true,
+                clipboard: false,
+                audio: false,
+            },
+        );
+        let ctx = Arc::new(AgentCtx::with_identity(CODE.into(), None, Some(store)));
+        let resp = router(ctx)
+            .oneshot(with_grant("/files/list?path=", "req-files"))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
     }
 
     #[tokio::test]

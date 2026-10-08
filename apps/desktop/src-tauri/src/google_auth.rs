@@ -546,6 +546,8 @@ pub async fn auth_sign_out(acc: State<'_, AccountState>, app: State<'_, AppState
     acc.clear_cache();
     let _ = state::delete_secret(SESSION_KEY);
     let _ = state::delete_secret(REFRESH_KEY);
+    // AUTH-10: account-authorized incoming work ends with sign-out.
+    app.grants.revoke_all();
     Ok(())
 }
 
@@ -881,7 +883,7 @@ pub async fn host_accept_request(
     permissions: serde_json::Value,
     trust: bool,
 ) -> Result<serde_json::Value, String> {
-    authed_call(
+    let res = authed_call(
         &acc,
         &app,
         "POST",
@@ -895,7 +897,26 @@ pub async fn host_accept_request(
             "trust": trust,
         })),
     )
-    .await
+    .await?;
+    // APPROVAL-05/06: record the grant natively, bound to the request ID and
+    // the exact approved permission set. Agent endpoints enforce it.
+    let requester = res
+        .get("requesterDeviceId")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let perms = res.get("permissions").cloned().unwrap_or(serde_json::json!({}));
+    app.grants.issue(
+        &id,
+        &requester,
+        crate::grants::Permissions {
+            control: perms.get("control").and_then(|v| v.as_bool()).unwrap_or(false),
+            files: perms.get("files").and_then(|v| v.as_bool()).unwrap_or(false),
+            clipboard: perms.get("clipboard").and_then(|v| v.as_bool()).unwrap_or(false),
+            audio: perms.get("audio").and_then(|v| v.as_bool()).unwrap_or(false),
+        },
+    );
+    Ok(res)
 }
 
 #[tauri::command]
@@ -935,6 +956,8 @@ pub async fn request_cancel(acc: State<'_, AccountState>, app: State<'_, AppStat
 #[tauri::command]
 pub async fn request_end(acc: State<'_, AccountState>, app: State<'_, AppState>, id: String) -> Result<(), String> {
     let _ = authed_call(&acc, &app, "POST", "/v1/requests/end", Some(serde_json::json!({ "id": id }))).await?;
+    // SESSION-09/10: the ended grant authorizes nothing further.
+    app.grants.revoke(&id);
     Ok(())
 }
 
@@ -970,5 +993,7 @@ pub async fn trust_revoke(
         Some(serde_json::json!({ "deviceId": device.device_id, "controllerDeviceId": controller_device_id })),
     )
     .await?;
+    // TRUST-02: every active grant of that controller dies with the revocation.
+    app.grants.revoke_device(&controller_device_id);
     Ok(())
 }

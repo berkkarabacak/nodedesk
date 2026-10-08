@@ -113,6 +113,7 @@ pub struct AgentRequest<'a> {
     query: Vec<(&'a str, String)>,
     body: Vec<u8>,
     timeout: Option<Duration>,
+    grant: Option<String>,
 }
 
 impl<'a> AgentRequest<'a> {
@@ -125,6 +126,7 @@ impl<'a> AgentRequest<'a> {
             query: vec![],
             body: vec![],
             timeout: None,
+            grant: None,
         }
     }
 
@@ -153,6 +155,13 @@ impl<'a> AgentRequest<'a> {
 
     pub fn timeout(mut self, timeout: Duration) -> Self {
         self.timeout = Some(timeout);
+        self
+    }
+
+    /// Present a session grant (request ID) with this request. The host
+    /// enforces the grant's permissions on the matching capability.
+    pub fn grant(mut self, token: Option<String>) -> Self {
+        self.grant = token;
         self
     }
 
@@ -194,6 +203,9 @@ impl<'a> AgentRequest<'a> {
             .header(auth::TS_HEADER, ts.to_string())
             .header(auth::NONCE_HEADER, nonce)
             .header(auth::AUTH_HEADER, signature);
+        if let Some(token) = &self.grant {
+            request = request.header(crate::grants::GRANT_HEADER, token);
+        }
         if !self.body.is_empty() {
             request = request
                 .header("content-type", "application/json")

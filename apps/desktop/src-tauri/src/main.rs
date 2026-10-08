@@ -15,6 +15,7 @@ mod discovery;
 mod files;
 mod files_queue;
 mod google_auth;
+mod grants;
 mod headless;
 mod monitor;
 mod moonlight;
@@ -160,7 +161,7 @@ async fn complete_onboarding(app: AppHandle, state: State<'_, AppState>, mode: S
         // Host capability: start agent now, bootstrap Sunshine in background.
         let code = ensure_access_code();
         let identity = tls::load_or_create(&state.config_dir)?;
-        tauri::async_runtime::spawn(agent::run(code, identity));
+        tauri::async_runtime::spawn(agent::run(code, identity, state.grants.clone()));
         let app2 = app.clone();
         tauri::async_runtime::spawn(async move {
             let _ = app2.emit("bootstrap-progress", "Installing Sunshine host…");
@@ -665,6 +666,7 @@ async fn send_files(
             http: state.http.clone(),
             code: crate::state::code_for_host(&state, &address)
                 .ok_or("No access code stored for this computer — add it with its code first")?,
+            grant: state.session_grants.lock().ok().and_then(|g| g.get(&address).cloned()),
         };
         tauri::async_runtime::spawn(async move {
             let _ = files::send_transfer(&ctx, &app2, &transfer).await;
@@ -707,6 +709,7 @@ async fn download_file(
         http: state.http.clone(),
         code: crate::state::code_for_host(&state, &address)
             .ok_or("No access code stored for this computer — add it with its code first")?,
+        grant: state.session_grants.lock().ok().and_then(|g| g.get(&address).cloned()),
     };
     tauri::async_runtime::spawn(async move {
         let _ = files::download_transfer(&ctx, &app2, &transfer).await;
@@ -755,6 +758,7 @@ async fn retry_transfer(app: AppHandle, transfer_id: String) -> Result<(), Strin
         http: state.http.clone(),
         code: crate::state::code_for_host(&state, &transfer.address)
             .ok_or("No access code stored for this computer — add it with its code first")?,
+        grant: state.session_grants.lock().ok().and_then(|g| g.get(&transfer.address).cloned()),
     };
     tauri::async_runtime::spawn(async move {
         if transfer.direction == "up" {
@@ -776,6 +780,23 @@ fn list_transfers(state: State<'_, AppState>) -> Vec<serde_json::Value> {
 #[tauri::command]
 fn agent_cert_fingerprint(state: State<'_, AppState>) -> Result<String, String> {
     Ok(tls::load_or_create(&state.config_dir)?.fingerprint)
+}
+
+/// Register the grant token (request ID) for an accepted outgoing session;
+/// subsequent agent calls to that host carry it (APPROVAL-06).
+#[tauri::command]
+fn session_grant_register(state: State<'_, AppState>, address: String, request_id: String) {
+    if let Ok(mut map) = state.session_grants.lock() {
+        map.insert(address, request_id);
+    }
+}
+
+/// Clear the grant token when the outgoing session ends (SESSION-09).
+#[tauri::command]
+fn session_grant_clear(state: State<'_, AppState>, address: String) {
+    if let Ok(mut map) = state.session_grants.lock() {
+        map.remove(&address);
+    }
 }
 
 #[tauri::command]
@@ -872,7 +893,8 @@ fn main() {
                 // The agent channel is TLS-encrypted (SECURITY-03); identity
                 // is persistent so pinned controllers survive restarts.
                 if let Ok(identity) = tls::load_or_create(&dir) {
-                    tauri::async_runtime::spawn(agent::run(code, identity));
+                    let grants = app.state::<AppState>().grants.clone();
+                    tauri::async_runtime::spawn(agent::run(code, identity, grants));
                 }
             }
             Ok(())
@@ -905,6 +927,8 @@ fn main() {
             retry_transfer,
             list_transfers,
             agent_cert_fingerprint,
+            session_grant_register,
+            session_grant_clear,
             terminal_exec,
             headless_status,
             enable_headless,

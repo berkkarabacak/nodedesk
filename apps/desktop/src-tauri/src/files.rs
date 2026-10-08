@@ -167,6 +167,8 @@ fn cancelled(state: &AppState) -> bool {
 pub struct TransferContext {
     pub http: reqwest::Client,
     pub code: String,
+    /// Session grant token for the active session, if any (APPROVAL-06).
+    pub grant: Option<String>,
 }
 
 /// Upload one file as a queued transfer. Resume continues only when this is
@@ -197,6 +199,7 @@ pub async fn send_transfer(
 
     let mut offset: u64 = match client::AgentRequest::get(&t.address, port, "/files/stat")
         .query(vec![("path", remote_path.clone())])
+        .grant(ctx.grant.clone())
         .timeout(Duration::from_millis(3000))
         .send(&ctx.http, code)
         .await
@@ -231,6 +234,7 @@ pub async fn send_transfer(
         }
         if let Err(e) = client::AgentRequest::post(&t.address, port, "/files/upload")
             .query(vec![("path", remote_path.clone()), ("offset", offset.to_string())])
+            .grant(ctx.grant.clone())
             .body(buf[..read].to_vec())
             .send_ok(&ctx.http, code)
             .await
@@ -249,6 +253,7 @@ pub async fn send_transfer(
     emit_transfer(app, t);
     let final_size: u64 = match client::AgentRequest::get(&t.address, port, "/files/stat")
         .query(vec![("path", remote_path)])
+        .grant(ctx.grant.clone())
         .timeout(Duration::from_millis(3000))
         .send(&ctx.http, code)
         .await
@@ -283,6 +288,7 @@ pub async fn download_transfer(
 
     let total: u64 = client::AgentRequest::get(&t.address, port, "/files/stat")
         .query(vec![("path", t.source.clone())])
+        .grant(ctx.grant.clone())
         .timeout(Duration::from_millis(3000))
         .send_ok(&ctx.http, code)
         .await?
@@ -313,6 +319,7 @@ pub async fn download_transfer(
         }
         let bytes = match client::AgentRequest::get(&t.address, port, "/files/download")
             .query(vec![("path", t.source.clone()), ("offset", offset.to_string())])
+            .grant(ctx.grant.clone())
             .send_ok(&ctx.http, code)
             .await
         {
