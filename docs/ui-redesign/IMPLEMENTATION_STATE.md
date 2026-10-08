@@ -6,8 +6,17 @@ Design source: `Simple Remote Desktop App UI.zip` → `Simple Remote Desktop App
 
 ## Current position
 
-- Current milestone: **COMPLETE at service+UI level** — see COMPLETION_REPORT.md. All nine slices landed with recorded evidence; what remains is hardware/native verification and the explicitly listed blockers.
-- Next single task: run `cargo check/clippy/test` on a Rust machine, fix any compile errors, then the SPEC §11 real-machine matrix.
+- Current milestone: **HARDENING IN PROGRESS** — Rust compile pass DONE (69/69 tests, clippy clean); SECURITY-03 TLS channel DONE; permission enforcement on agent endpoints DONE; remaining: live OAuth config, hardware matrix, readiness/toolbar spike.
+- Next single task: follow docs/ui-redesign/DEMO.md for the investor demo run; then the SPEC §11 real-machine matrix.
+
+## Hardening log (2026-10-08, after the investor-demo push)
+
+- **Rust toolchain installed** (stable 1.99, GNU + MinGW). Baseline `cargo check` found 6 real compile errors in the M-series code (Arc/Mutex mismatch, missing Manager import) — ALL FIXED.
+- `cargo check --all-targets`: clean. `cargo clippy --all-targets -- -D warnings`: clean. `cargo test`: **69/69 pass** incl. the simulated two-machine end-to-end test. Issue #7 closed.
+- **SECURITY-03 DONE**: agent channel now TLS with persistent self-signed per-device identity + HMAC-authenticated TOFU pinning; fingerprint displayed in This Computer; sim_test runs over TLS. docs/security.md updated. Issue #10 closed. (Found+fixed: the /agent/cert endpoint initially lacked the HMAC check — without it the pinning exchange was forgeable.)
+- **APPROVAL-05/06 enforcement DONE (native half)**: grants.rs (token=request ID, exact approved permissions, TTL) checked by agent endpoints — view-only 403s on files/terminal, forged tokens denied; revocation cascades (session end, trust revoke, sign-out). Endpoint integration test included. 68→69 rust tests green.
+- Remaining from #9: stream-readiness signal + toolbar-over-viewer + old-paired-client bypass on hardware.
+- **Demo runbook**: docs/ui-redesign/DEMO.md (10-minute local investor demo, J1→J2).
 - Source branch/commit: `main` @ `ff07bf2e171b9d3c247fe6c971c75c602f882abe` (matches spec snapshot; no pre-existing user changes, working tree was clean at start).
 
 ## Architecture decisions
