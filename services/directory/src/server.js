@@ -624,7 +624,9 @@ export function createDirectoryService({ dbPath = ':memory:', verifyIdToken, cli
 }
 
 // Direct start: node src/server.js
-if (import.meta.url === `file://${process.argv[1]}`) {
+import { pathToFileURL } from 'node:url'
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const clientId = process.env.GOOGLE_CLIENT_ID
   if (!clientId) {
     console.error('GOOGLE_CLIENT_ID is required. See docs/ui-redesign/GOOGLE_SETUP.md.')
