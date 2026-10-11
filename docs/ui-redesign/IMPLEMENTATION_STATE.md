@@ -6,7 +6,18 @@ Design source: `Simple Remote Desktop App UI.zip` → `Simple Remote Desktop App
 
 ## Current position
 
-- Current milestone: **HARDENING IN PROGRESS** — Rust compile pass DONE (69/69 tests, clippy clean); SECURITY-03 TLS channel DONE; permission enforcement on agent endpoints DONE; remaining: live OAuth config, hardware matrix, readiness/toolbar spike.
+- Current milestone: **DEMO-READY** — all slices + hardening pushed to PR #11 (branch `ui-redesign`); demo kit shipped; final regression green.
+
+## Finalization (2026-10-10/11)
+
+- demo-kit/ shipped to the repo (run of show, one-click scripts; installer binary gitignored)
+- Final regression: Rust 69/69 + clippy clean · frontend 82/82 + build OK · service 30/30
+- Installer: NodeDesk-Setup-x64.exe (unsigned — SmartScreen note in demo-kit/README.md)
+- Pushed: ui-redesign @ 55a3be5; PR #11 open; issues #7, #10 closed
+- Remaining (tracked): #6 native/hardware matrix, #8 operator OAuth config, #9 readiness/toolbar spike
+- Rotate the demo PAT used for pushes (it traveled in chat)
+
+- Previous position: **HARDENING IN PROGRESS** — Rust compile pass DONE (69/69 tests, clippy clean); SECURITY-03 TLS channel DONE; permission enforcement on agent endpoints DONE; remaining: live OAuth config, hardware matrix, readiness/toolbar spike.
 - Next single task: follow docs/ui-redesign/DEMO.md for the investor demo run; then the SPEC §11 real-machine matrix.
 
 ## Hardening log (2026-10-08, after the investor-demo push)
