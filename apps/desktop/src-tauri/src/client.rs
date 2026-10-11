@@ -9,6 +9,75 @@ use std::time::Duration;
 
 use crate::auth;
 
+/// Key for the pinned certificate of one host endpoint in OS secure storage.
+fn pin_key(address: &str, port: u16) -> String {
+    format!("agent-cert-{address}:{port}")
+}
+
+/// Drop a pinned certificate (forget-host / explicit re-pair flows).
+pub fn clear_pinned_cert(address: &str, port: u16) {
+    let _ = crate::state::delete_secret(&pin_key(address, port));
+}
+
+/// Client trusting exactly the pinned certificate of this host, or TOFU:
+/// fetch the host's public cert with an HMAC-signed request over an
+/// unverified channel, pin it, then require it from then on. A later mismatch
+/// is a hard error, never a silent re-pin.
+async fn pinned_client(
+    http: &reqwest::Client,
+    address: &str,
+    port: u16,
+    code: &str,
+) -> Result<reqwest::Client, String> {
+    let key = pin_key(address, port);
+    if let Some(pem) = crate::state::read_secret(&key) {
+        let cert = reqwest::Certificate::from_pem(pem.as_bytes())
+            .map_err(|_| "the pinned certificate for this computer is unreadable".to_string())?;
+        return reqwest::Client::builder()
+            .user_agent("NodeDesk/1.0")
+            .add_root_certificate(cert)
+            .danger_accept_invalid_hostnames(true)
+            .build()
+            .map_err(|e| e.to_string());
+    }
+
+    // First contact: signed TOFU exchange. The signature over /agent/cert is
+    // checked by the host with the shared access code, so the certificate we
+    // pin is provably from someone holding that code.
+    let tofu = reqwest::Client::builder()
+        .user_agent("NodeDesk/1.0")
+        .danger_accept_invalid_certs(true)
+        .build()
+        .map_err(|e| e.to_string())?;
+    let target = "/agent/cert";
+    let ts = auth::unix_now();
+    let nonce = auth::new_nonce();
+    let signature = auth::signature(code, "GET", target, ts, &nonce, &auth::body_digest(&[]));
+    let pem = tofu
+        .get(format!("https://{address}:{port}{target}"))
+        .header(auth::TS_HEADER, ts.to_string())
+        .header(auth::NONCE_HEADER, nonce)
+        .header(auth::AUTH_HEADER, signature)
+        .send()
+        .await
+        .map_err(|e| format!("can't reach {address}: {e}"))?
+        .error_for_status()
+        .map_err(|e| format!("the host refused the certificate request: {e}"))?
+        .text()
+        .await
+        .map_err(|e| e.to_string())?;
+    let cert = reqwest::Certificate::from_pem(pem.as_bytes())
+        .map_err(|_| "the host returned an invalid certificate".to_string())?;
+    crate::state::store_secret(&key, &pem)?;
+    let _ = http;
+    reqwest::Client::builder()
+        .user_agent("NodeDesk/1.0")
+        .add_root_certificate(cert)
+        .danger_accept_invalid_hostnames(true)
+        .build()
+        .map_err(|e| e.to_string())
+}
+
 /// Percent-encodes everything outside the unreserved set, so the encoded form
 /// survives URL parsing unchanged.
 fn encode(value: &str) -> String {
@@ -44,6 +113,7 @@ pub struct AgentRequest<'a> {
     query: Vec<(&'a str, String)>,
     body: Vec<u8>,
     timeout: Option<Duration>,
+    grant: Option<String>,
 }
 
 impl<'a> AgentRequest<'a> {
@@ -56,6 +126,7 @@ impl<'a> AgentRequest<'a> {
             query: vec![],
             body: vec![],
             timeout: None,
+            grant: None,
         }
     }
 
@@ -87,17 +158,32 @@ impl<'a> AgentRequest<'a> {
         self
     }
 
+    /// Present a session grant (request ID) with this request. The host
+    /// enforces the grant's permissions on the matching capability.
+    pub fn grant(mut self, token: Option<String>) -> Self {
+        self.grant = token;
+        self
+    }
+
     pub fn target(&self) -> String {
         path_with_query(self.path, &self.query)
     }
 
-    /// Signs and sends the request.
+    /// Signs and sends the request over the TLS agent channel (SECURITY-03).
+    ///
+    /// The host's self-signed certificate is pinned on first contact. The
+    /// pinning exchange itself is HMAC-signed like every other request, so a
+    /// network attacker cannot substitute a certificate without knowing the
+    /// access code. Hostname checks stay off; the pinned key is the identity.
     pub async fn send(
         self,
         http: &reqwest::Client,
         code: &str,
     ) -> Result<reqwest::Response, String> {
         let target = self.target();
+        let address = self.address;
+        let client = pinned_client(http, address, self.port, code).await?;
+
         let ts = auth::unix_now();
         let nonce = auth::new_nonce();
         let signature = auth::signature(
@@ -109,15 +195,17 @@ impl<'a> AgentRequest<'a> {
             &auth::body_digest(&self.body),
         );
 
-        let address = self.address;
-        let mut request = http
+        let mut request = client
             .request(
                 self.method.clone(),
-                format!("http://{address}:{}{target}", self.port),
+                format!("https://{address}:{}{target}", self.port),
             )
             .header(auth::TS_HEADER, ts.to_string())
             .header(auth::NONCE_HEADER, nonce)
             .header(auth::AUTH_HEADER, signature);
+        if let Some(token) = &self.grant {
+            request = request.header(crate::grants::GRANT_HEADER, token);
+        }
         if !self.body.is_empty() {
             request = request
                 .header("content-type", "application/json")

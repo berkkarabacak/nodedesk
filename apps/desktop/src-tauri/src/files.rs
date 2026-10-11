@@ -16,6 +16,7 @@ use std::time::Duration;
 
 use crate::client;
 use crate::safepath;
+#[cfg(test)]
 use crate::state::AppState;
 
 const CHUNK: usize = 2 * 1024 * 1024; // 2 MiB
@@ -41,6 +42,8 @@ pub enum StatError {
     Denied(String),
 }
 
+/// Legacy single-shot engine, kept for the simulated two-machine test only.
+#[cfg(test)]
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct TransferProgress {
@@ -144,17 +147,210 @@ pub fn download_dir() -> Option<PathBuf> {
 // Client-side transfers (called via Tauri commands)
 // ---------------------------------------------------------------------------
 
+#[cfg(test)]
 fn code_for(state: &AppState, address: &str) -> Result<String, String> {
     crate::state::code_for_host(state, address)
         .ok_or_else(|| "No access code stored for this computer — add it with its code first".into())
 }
 
+#[cfg(test)]
 fn cancelled(state: &AppState) -> bool {
     state.transfer_cancel.load(Ordering::SeqCst)
 }
 
+// ---------------------------------------------------------------------------
+// M7 queue-driven transfers (per-transfer cancel + identity-checked resume)
+// ---------------------------------------------------------------------------
+
+/// Everything a spawned transfer task needs — cloneable, so tasks never
+/// borrow the managed AppState.
+pub struct TransferContext {
+    pub http: reqwest::Client,
+    pub code: String,
+    /// Session grant token for the active session, if any (APPROVAL-06).
+    pub grant: Option<String>,
+}
+
+/// Upload one file as a queued transfer. Resume continues only when this is
+/// the same transfer record and the source identity is unchanged (FILE-06);
+/// the remote offset still comes from the host's actual partial file.
+pub async fn send_transfer(
+    ctx: &TransferContext,
+    app: &tauri::AppHandle,
+    t: &crate::files_queue::Transfer,
+) -> Result<(), String> {
+    use crate::files_queue::{emit_transfer, source_identity};
+    let code = &ctx.code;
+    // FILE-06: identity is verified before resuming.
+    let identity = source_identity(std::path::Path::new(&t.source))?;
+    if identity != t.identity {
+        t.set_state("failed");
+        emit_transfer(app, t);
+        return Err("The source file changed since this transfer was queued — it was not resumed.".into());
+    }
+    t.set_state("transferring");
+    emit_transfer(app, t);
+
+    let local = PathBuf::from(&t.source);
+    let mut file = std::fs::File::open(&local).map_err(|e| format!("cannot open {}: {e}", t.file))?;
+    let remote_dir = incoming_dir();
+    let port = crate::discovery::agent_port();
+    let remote_path = t.dest.clone();
+
+    let mut offset: u64 = match client::AgentRequest::get(&t.address, port, "/files/stat")
+        .query(vec![("path", remote_path.clone())])
+        .grant(ctx.grant.clone())
+        .timeout(Duration::from_millis(3000))
+        .send(&ctx.http, code)
+        .await
+    {
+        Ok(resp) if resp.status().is_success() => resp.json::<StatResponse>().await.map(|s| s.size).unwrap_or(0),
+        _ => 0,
+    };
+    // A resumed upload must continue OUR partial file, never an unrelated
+    // complete file: if the remote side is already complete or larger, the
+    // caller's collision policy decides instead of blind appending (FILE-07).
+    if offset >= t.total_bytes && t.total_bytes > 0 {
+        if t.on_conflict == "overwrite" {
+            offset = 0;
+        } else {
+            t.set_state("failed");
+            emit_transfer(app, t);
+            return Err(format!("{} already exists on the other computer.", t.file));
+        }
+    }
+
+    let mut buf = vec![0u8; CHUNK];
+    file.seek(SeekFrom::Start(offset)).map_err(|e| e.to_string())?;
+    loop {
+        if t.is_cancelled() {
+            t.set_state("cancelled");
+            emit_transfer(app, t);
+            return Err("Transfer cancelled".into());
+        }
+        let read = file.read(&mut buf).map_err(|e| e.to_string())?;
+        if read == 0 {
+            break;
+        }
+        if let Err(e) = client::AgentRequest::post(&t.address, port, "/files/upload")
+            .query(vec![("path", remote_path.clone()), ("offset", offset.to_string())])
+            .grant(ctx.grant.clone())
+            .body(buf[..read].to_vec())
+            .send_ok(&ctx.http, code)
+            .await
+        {
+            t.set_state("interrupted"); // FILE-09: accurate state, retryable
+            emit_transfer(app, t);
+            return Err(format!("upload failed: {e}"));
+        }
+        offset += read as u64;
+        t.done.store(offset, Ordering::SeqCst);
+        emit_transfer(app, t);
+    }
+    let _ = remote_dir;
+    // Done requires destination completion: every byte acknowledged.
+    t.set_state("verifying");
+    emit_transfer(app, t);
+    let final_size: u64 = match client::AgentRequest::get(&t.address, port, "/files/stat")
+        .query(vec![("path", remote_path)])
+        .grant(ctx.grant.clone())
+        .timeout(Duration::from_millis(3000))
+        .send(&ctx.http, code)
+        .await
+    {
+        Ok(resp) if resp.status().is_success() => resp.json::<StatResponse>().await.map(|s| s.size).unwrap_or(0),
+        _ => 0,
+    };
+    if final_size != t.total_bytes {
+        t.set_state("interrupted");
+        emit_transfer(app, t);
+        return Err(format!("{} did not finish completely — use Retry to resume.", t.file));
+    }
+    t.set_state("completed");
+    emit_transfer(app, t);
+    Ok(())
+}
+
+/// Download one remote file as a queued transfer into ~/Downloads/NodeDesk,
+/// applying the collision policy and verifying completion by size (content
+/// hash verification needs the agent /files/hash endpoint — tracked in
+/// IMPLEMENTATION_STATE as part of SECURITY-03 hardening).
+pub async fn download_transfer(
+    ctx: &TransferContext,
+    app: &tauri::AppHandle,
+    t: &crate::files_queue::Transfer,
+) -> Result<String, String> {
+    use crate::files_queue::{emit_transfer, resolve_collision};
+    let code = &ctx.code;
+    t.set_state("transferring");
+    emit_transfer(app, t);
+    let port = crate::discovery::agent_port();
+
+    let total: u64 = client::AgentRequest::get(&t.address, port, "/files/stat")
+        .query(vec![("path", t.source.clone())])
+        .grant(ctx.grant.clone())
+        .timeout(Duration::from_millis(3000))
+        .send_ok(&ctx.http, code)
+        .await?
+        .json::<StatResponse>()
+        .await
+        .map_err(|e| e.to_string())?
+        .size;
+
+    let desired = PathBuf::from(&t.dest);
+    let local_path = resolve_collision(&desired, &t.on_conflict);
+    // Resume only our own partial file for the same transfer (FILE-06).
+    let mut offset: u64 = std::fs::metadata(&local_path).map(|m| m.len()).unwrap_or(0);
+    if offset > total {
+        let _ = std::fs::remove_file(&local_path);
+        offset = 0;
+    }
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&local_path)
+        .map_err(|e| e.to_string())?;
+
+    while offset < total {
+        if t.is_cancelled() {
+            t.set_state("cancelled");
+            emit_transfer(app, t);
+            return Err("Transfer cancelled".into());
+        }
+        let bytes = match client::AgentRequest::get(&t.address, port, "/files/download")
+            .query(vec![("path", t.source.clone()), ("offset", offset.to_string())])
+            .grant(ctx.grant.clone())
+            .send_ok(&ctx.http, code)
+            .await
+        {
+            Ok(resp) => resp.bytes().await.map_err(|e| e.to_string())?,
+            Err(e) => {
+                t.set_state("interrupted");
+                emit_transfer(app, t);
+                return Err(format!("download failed: {e}"));
+            }
+        };
+        if bytes.is_empty() {
+            break;
+        }
+        file.write_all(&bytes).map_err(|e| e.to_string())?;
+        offset += bytes.len() as u64;
+        t.done.store(offset, Ordering::SeqCst);
+        emit_transfer(app, t);
+    }
+    if offset != total {
+        t.set_state("interrupted");
+        emit_transfer(app, t);
+        return Err(format!("{} did not finish completely — use Retry to resume.", t.file));
+    }
+    t.set_state("completed");
+    emit_transfer(app, t);
+    Ok(local_path.to_string_lossy().to_string())
+}
+
 /// Sends local files to a host's incoming folder, resuming partial uploads.
 /// `emit` receives progress updates (the command layer forwards them to the UI).
+#[cfg(test)]
 pub async fn send_files(
     state: &AppState,
     address: &str,
@@ -226,6 +422,7 @@ pub async fn send_files(
 }
 
 /// Downloads a remote file into ~/Downloads/NodeDesk, resuming partial files.
+#[cfg(test)]
 pub async fn download_file(
     state: &AppState,
     address: &str,

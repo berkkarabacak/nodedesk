@@ -1,0 +1,14 @@
+{
+  "name": "nodedesk-directory",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "description": "Self-hostable NodeDesk account directory service (M2: auth + account-scoped empty directory)",
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test test/*.test.js"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  }
+}

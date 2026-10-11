@@ -13,6 +13,9 @@ mod auth;
 mod client;
 mod discovery;
 mod files;
+mod files_queue;
+mod google_auth;
+mod grants;
 mod headless;
 mod monitor;
 mod moonlight;
@@ -21,6 +24,7 @@ mod safepath;
 mod state;
 mod sunshine;
 mod terminal;
+mod tls;
 mod update;
 mod wol;
 
@@ -156,7 +160,8 @@ async fn complete_onboarding(app: AppHandle, state: State<'_, AppState>, mode: S
     if mode == "host" || mode == "both" {
         // Host capability: start agent now, bootstrap Sunshine in background.
         let code = ensure_access_code();
-        tauri::async_runtime::spawn(agent::run(code));
+        let identity = tls::load_or_create(&state.config_dir)?;
+        tauri::async_runtime::spawn(agent::run(code, identity, state.grants.clone()));
         let app2 = app.clone();
         tauri::async_runtime::spawn(async move {
             let _ = app2.emit("bootstrap-progress", "Installing Sunshine host…");
@@ -312,6 +317,7 @@ async fn add_manual_host(state: State<'_, AppState>, address: String, code: Stri
 #[tauri::command]
 fn forget_host(state: State<'_, AppState>, address: String) -> Result<(), String> {
     state::forget_host_code(&address)?;
+    client::clear_pinned_cert(&address, discovery::agent_port());
     {
         let mut settings = state.settings.write().map_err(|e| e.to_string())?;
         settings.manual_hosts.retain(|h| h.address != address);
@@ -334,13 +340,96 @@ async fn pair_computer(app: AppHandle, address: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn connect_computer(app: AppHandle, address: String) -> Result<(), String> {
+async fn connect_computer(app: AppHandle, address: String, quality: Option<String>) -> Result<(), String> {
     let state = app.state::<AppState>();
     let exe = moonlight::ensure_available(&state.http, &state.config_dir).await?;
-    let settings = state.settings.read().map(|s| s.clone()).unwrap_or_default();
+    let mut settings = state.settings.read().map(|s| s.clone()).unwrap_or_default();
+    // Per-session quality override (TOOLBAR-03): the external viewer only
+    // accepts stream parameters at launch, so an override applies to THIS
+    // launch without touching the persisted default.
+    if let Some(preset) = quality.as_deref() {
+        match preset {
+            "speed" => {
+                settings.codec = "h264".into();
+                settings.bitrate_mbps = 15;
+                settings.fps = 60;
+                settings.resolution = "1080p".into();
+                settings.hdr = false;
+            }
+            "balanced" => {
+                settings.codec = "auto".into();
+                settings.bitrate_mbps = 40;
+                settings.fps = 60;
+                settings.resolution = "auto".into();
+            }
+            "quality" => {
+                settings.codec = "auto".into();
+                settings.bitrate_mbps = 80;
+                settings.fps = 60;
+                settings.resolution = "auto".into();
+            }
+            _ => {} // "auto": use the persisted default as-is
+        }
+    }
     moonlight::start_stream(&state, exe, &settings, &address)?;
+    // Process spawn is NOT session readiness (SESSION-02): this event means
+    // the external viewer process started. True stream-readiness detection is
+    // the documented native spike (docs/ui-redesign/NATIVE_SPIKE.md).
     let _ = app.emit("stream-started", &address);
+    moonlight::watch_stream(app.clone());
     Ok(())
+}
+
+/// Accessible displays on the local machine. Used for the session toolbar's
+/// monitor panel; a remote-aware version is part of the embedded-viewer
+/// milestone. Never fabricates entries (TOOLBAR-02).
+#[tauri::command]
+fn session_list_displays(_device_id: String) -> Vec<serde_json::Value> {
+    // sysinfo does not enumerate displays; the interim external viewer shows
+    // the host's primary display. Report exactly that one real capability.
+    vec![serde_json::json!({ "index": 1, "resolution": "primary display", "primary": true })]
+}
+
+/// Live session measurements. The external viewer exposes no metrics channel
+/// to NodeDesk, so there is nothing truthful to report yet (TOOLBAR-04).
+#[tauri::command]
+fn session_stats() -> Option<serde_json::Value> {
+    None
+}
+
+/// NodeDesk clipboard channel toggle for the active session. Until the
+/// embedded viewer exists this governs only NodeDesk's own channel, and the
+/// command fails truthfully when no session is active (TOOLBAR-05/06).
+#[tauri::command]
+fn session_clipboard(state: State<'_, AppState>, enabled: bool) -> Result<(), String> {
+    let active = state.stream_child.lock().map(|g| g.is_some()).unwrap_or(false);
+    if !active {
+        return Err("No active session.".into());
+    }
+    let mut guard = state.session_clipboard.lock().map_err(|e| e.to_string())?;
+    *guard = enabled;
+    Ok(())
+}
+
+#[tauri::command]
+fn session_clipboard_send(state: State<'_, AppState>, text: String) -> Result<(), String> {
+    let on = state.session_clipboard.lock().map(|g| *g).unwrap_or(false);
+    if !on {
+        return Err("Clipboard sharing is off for this session.".into());
+    }
+    // Clipboard bytes travel over the (currently HMAC-authenticated) agent
+    // channel; SECURITY-03 tracks upgrading it to an encrypted transport.
+    let _ = text;
+    Err("Clipboard send needs the embedded viewer — not available yet.".into())
+}
+
+#[tauri::command]
+fn session_clipboard_receive(state: State<'_, AppState>) -> Result<String, String> {
+    let on = state.session_clipboard.lock().map(|g| *g).unwrap_or(false);
+    if !on {
+        return Err("Clipboard sharing is off for this session.".into());
+    }
+    Err("Clipboard receive needs the embedded viewer — not available yet.".into())
 }
 
 #[tauri::command]
@@ -529,29 +618,185 @@ async fn list_files(state: State<'_, AppState>, address: String, path: String) -
         .map_err(|e| e.to_string())
 }
 
+/// Enqueue one upload per file (serial per-transfer tasks; unique IDs).
+/// Returns the transfer IDs in the same order as `paths` (FILE-01).
 #[tauri::command]
-async fn send_files(app: AppHandle, address: String, paths: Vec<String>) -> Result<(), String> {
+async fn send_files(
+    app: AppHandle,
+    address: String,
+    paths: Vec<String>,
+    on_conflict: Option<String>,
+) -> Result<Vec<String>, String> {
     let state = app.state::<AppState>();
-    let app2 = app.clone();
-    files::send_files(&state, &address, paths, &move |p| {
-        let _ = app2.emit("transfer-progress", p);
-    })
-    .await
+    let remote_dir = files::incoming_dir();
+    let mut ids = vec![];
+    for path in &paths {
+        let local = std::path::PathBuf::from(path);
+        // Folders are rejected truthfully until recursive transfer exists
+        // (FILE-08) — never claim a folder was sent.
+        if local.is_dir() {
+            return Err(format!(
+                "Folder transfer isn't supported yet — {} was not sent. Compress it or send the files inside.",
+                local.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()
+            ));
+        }
+        let name = local
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .ok_or("invalid file name")?;
+        let identity = files_queue::source_identity(&local)?;
+        let total = local.metadata().map_err(|e| e.to_string())?.len();
+        let transfer = state.transfers.add(files_queue::Transfer {
+            id: format!("t-{:016x}", rand::random::<u64>()),
+            direction: "up".into(),
+            file: name.clone(),
+            address: address.clone(),
+            source: local.to_string_lossy().to_string(),
+            dest: format!("{remote_dir}/{name}"),
+            total_bytes: total,
+            identity,
+            on_conflict: on_conflict.clone().unwrap_or_else(|| "keep-both".into()),
+            cancel: Default::default(),
+            done: Default::default(),
+            state: std::sync::Arc::new(std::sync::Mutex::new("queued".into())),
+        });
+        ids.push(transfer.id.clone());
+        let app2 = app.clone();
+        let ctx = files::TransferContext {
+            http: state.http.clone(),
+            code: crate::state::code_for_host(&state, &address)
+                .ok_or("No access code stored for this computer — add it with its code first")?,
+            grant: state.session_grants.lock().ok().and_then(|g| g.get(&address).cloned()),
+        };
+        tauri::async_runtime::spawn(async move {
+            let _ = files::send_transfer(&ctx, &app2, &transfer).await;
+        });
+    }
+    Ok(ids)
 }
 
 #[tauri::command]
-async fn download_file(app: AppHandle, address: String, path: String) -> Result<String, String> {
+async fn download_file(
+    app: AppHandle,
+    address: String,
+    path: String,
+    on_conflict: Option<String>,
+) -> Result<String, String> {
     let state = app.state::<AppState>();
+    let name = std::path::Path::new(&path)
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .ok_or("invalid remote path")?;
+    let dest_dir = files::download_dir().ok_or("no download directory")?;
+    let dest = dest_dir.join(&name);
+    let transfer = state.transfers.add(files_queue::Transfer {
+        id: format!("t-{:016x}", rand::random::<u64>()),
+        direction: "down".into(),
+        file: name,
+        address: address.clone(),
+        source: path.clone(),
+        dest: dest.to_string_lossy().to_string(),
+        total_bytes: 0, // learned from the host during the transfer
+        identity: path.clone(), // remote identity = exact remote path for this transfer
+        on_conflict: on_conflict.unwrap_or_else(|| "keep-both".into()),
+        cancel: Default::default(),
+        done: Default::default(),
+        state: std::sync::Arc::new(std::sync::Mutex::new("queued".into())),
+    });
+    let id = transfer.id.clone();
     let app2 = app.clone();
-    files::download_file(&state, &address, &path, &move |p| {
-        let _ = app2.emit("transfer-progress", p);
-    })
-    .await
+    let ctx = files::TransferContext {
+        http: state.http.clone(),
+        code: crate::state::code_for_host(&state, &address)
+            .ok_or("No access code stored for this computer — add it with its code first")?,
+        grant: state.session_grants.lock().ok().and_then(|g| g.get(&address).cloned()),
+    };
+    tauri::async_runtime::spawn(async move {
+        let _ = files::download_transfer(&ctx, &app2, &transfer).await;
+    });
+    Ok(id)
+}
+
+/// FILE-05: cancel exactly one transfer by ID.
+#[tauri::command]
+fn cancel_transfer(state: State<'_, AppState>, transfer_id: Option<String>) -> Result<(), String> {
+    match transfer_id {
+        Some(id) => {
+            if state.transfers.cancel(&id) {
+                Ok(())
+            } else {
+                Err("No transfer with that ID.".into())
+            }
+        }
+        // Legacy behavior for callers that predate transfer IDs.
+        None => {
+            state.transfer_cancel.store(true, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        }
+    }
+}
+
+/// FILE-06: retry resumes only the same transfer record; the engine re-verifies
+/// source identity before continuing.
+#[tauri::command]
+async fn retry_transfer(app: AppHandle, transfer_id: String) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let transfer = state
+        .transfers
+        .get(&transfer_id)
+        .ok_or("No transfer with that ID.")?;
+    {
+        let s = transfer.state.lock().map_err(|e| e.to_string())?;
+        if !matches!(s.as_str(), "interrupted" | "failed" | "cancelled") {
+            return Err("Only an interrupted transfer can be retried.".into());
+        }
+    }
+    transfer.cancel.store(false, std::sync::atomic::Ordering::SeqCst);
+    transfer.set_state("queued");
+    let app2 = app.clone();
+    let ctx = files::TransferContext {
+        http: state.http.clone(),
+        code: crate::state::code_for_host(&state, &transfer.address)
+            .ok_or("No access code stored for this computer — add it with its code first")?,
+        grant: state.session_grants.lock().ok().and_then(|g| g.get(&transfer.address).cloned()),
+    };
+    tauri::async_runtime::spawn(async move {
+        if transfer.direction == "up" {
+            let _ = files::send_transfer(&ctx, &app2, &transfer).await;
+        } else {
+            let _ = files::download_transfer(&ctx, &app2, &transfer).await;
+        }
+    });
+    Ok(())
 }
 
 #[tauri::command]
-fn cancel_transfer(state: State<'_, AppState>) {
-    state.transfer_cancel.store(true, std::sync::atomic::Ordering::SeqCst);
+fn list_transfers(state: State<'_, AppState>) -> Vec<serde_json::Value> {
+    state.transfers.snapshots()
+}
+
+/// The local agent TLS certificate fingerprint, for out-of-band verification
+/// against a controller's pinned value (SECURITY-03).
+#[tauri::command]
+fn agent_cert_fingerprint(state: State<'_, AppState>) -> Result<String, String> {
+    Ok(tls::load_or_create(&state.config_dir)?.fingerprint)
+}
+
+/// Register the grant token (request ID) for an accepted outgoing session;
+/// subsequent agent calls to that host carry it (APPROVAL-06).
+#[tauri::command]
+fn session_grant_register(state: State<'_, AppState>, address: String, request_id: String) {
+    if let Ok(mut map) = state.session_grants.lock() {
+        map.insert(address, request_id);
+    }
+}
+
+/// Clear the grant token when the outgoing session ends (SESSION-09).
+#[tauri::command]
+fn session_grant_clear(state: State<'_, AppState>, address: String) {
+    if let Ok(mut map) = state.session_grants.lock() {
+        map.remove(&address);
+    }
 }
 
 #[tauri::command]
@@ -629,21 +874,28 @@ fn set_autostart(enabled: bool) {
 }
 
 fn main() {
+    tls::ensure_crypto_provider();
     tauri::Builder::default()
         .setup(|app| {
             let dir = app
                 .path()
                 .app_config_dir()
                 .unwrap_or_else(|_| std::path::PathBuf::from("."));
-            let app_state = AppState::new(dir);
+            let app_state = AppState::new(dir.clone());
             let onboarded = app_state.settings.read().map(|s| s.onboarded).unwrap_or(false);
             let mode = app_state.settings.read().map(|s| s.mode.clone()).unwrap_or_default();
             app.manage(app_state);
+            app.manage(google_auth::AccountState::new(&dir));
 
             discovery::start_responder();
             if onboarded && (mode == "host" || mode == "both") {
                 let code = ensure_access_code();
-                tauri::async_runtime::spawn(agent::run(code));
+                // The agent channel is TLS-encrypted (SECURITY-03); identity
+                // is persistent so pinned controllers survive restarts.
+                if let Ok(identity) = tls::load_or_create(&dir) {
+                    let grants = app.state::<AppState>().grants.clone();
+                    tauri::async_runtime::spawn(agent::run(code, identity, grants));
+                }
             }
             Ok(())
         })
@@ -672,9 +924,42 @@ fn main() {
             send_files,
             download_file,
             cancel_transfer,
+            retry_transfer,
+            list_transfers,
+            agent_cert_fingerprint,
+            session_grant_register,
+            session_grant_clear,
             terminal_exec,
             headless_status,
             enable_headless,
+            google_auth::auth_get_state,
+            google_auth::auth_sign_in,
+            google_auth::auth_sign_out,
+            google_auth::auth_set_stay_signed_in,
+            google_auth::dir_list_computers,
+            google_auth::device_get_identity,
+            google_auth::device_enroll,
+            google_auth::device_heartbeat,
+            google_auth::dir_resolve_device_id,
+            google_auth::dir_add_computer,
+            google_auth::dir_rename_computer,
+            google_auth::dir_remove_computer,
+            google_auth::host_get_policy,
+            google_auth::host_set_policy,
+            google_auth::host_pending_requests,
+            google_auth::host_accept_request,
+            google_auth::host_reject_request,
+            google_auth::request_create,
+            google_auth::request_status,
+            google_auth::request_cancel,
+            google_auth::request_end,
+            google_auth::trust_list,
+            google_auth::trust_revoke,
+            session_list_displays,
+            session_stats,
+            session_clipboard,
+            session_clipboard_send,
+            session_clipboard_receive,
         ])
         .run(tauri::generate_context!())
         .expect("error while running NodeDesk");

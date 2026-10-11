@@ -1,0 +1,1624 @@
+NODEDESK: IMPLEMENT THE NEW UI THROUGH USER JOURNEYS AND BDD
+COPY THIS ENTIRE FILE INTO THE IMPLEMENTING AI'S FIRST MESSAGE.
+
+You are the product engineer responsible for improving the EXISTING NodeDesk
+application. Implement working software in the repository. Do not merely give
+advice, produce screenshots, or create a disconnected HTML prototype.
+
+Repository: https://github.com/berkkarabacak/nodedesk
+Design attachment: Simple Remote Desktop App UI.zip
+Primary design file inside the ZIP: Simple Remote Desktop App.dc.html
+
+PRODUCT GOAL
+Build a free, easy-to-use TeamViewer alternative named NodeDesk. A normal person
+should install it, sign in with Google, see their saved computers, click Connect,
+and use the selected computer remotely. Previously authorized computers should
+not require typing an IP address, Device ID, PIN, or access code every time.
+The core experience must work on Windows Home without requiring Windows Pro or
+an RDP license. Reuse the existing Sunshine/Moonlight foundation.
+
+PRIMARY JOURNEY
+Install on both computers -> sign in with the same Google account -> explicitly
+enable hosting and complete initial authorization -> see the remote computer in
+My Computers -> click Connect once -> use its real desktop -> Disconnect.
+
+WHAT YOU ARE BEING GIVEN
+This is both an implementation prompt and a behavioral acceptance specification.
+The design supplies appearance and screen structure. The rules below supply the
+missing interaction logic, authorization rules, loading/error states, and tests.
+Items explicitly called proposed are product decisions made to fill gaps in the
+mockup; they are not claims about existing repository capabilities.
+
+Resolve conflicts in this order:
+1. Explicit instructions from the product owner in the current conversation.
+2. Behavioral requirements and security invariants in this prompt.
+3. Supplied design for visual structure and styling.
+4. Existing conventions and architecture where compatible.
+5. Your implementation preference.
+
+Do not remove a required behavior because it is absent from the existing API.
+Add the necessary integration or record a precise dependency blocker. A blocked
+behavior is not complete, and a browser demo is not proof of native functionality.
+
+==========================================================================
+01. READ THIS FIRST: WORKING WITH LIMITED CONTEXT
+==========================================================================
+
+Do not try to implement the entire document in one unreviewable change. Work in
+the ordered vertical slices in Section 13. Each slice must connect visible UI to
+real behavior, cover its failure cases, and leave the repository buildable.
+
+Before changing code:
+1. Read applicable AGENTS.md instructions, git status, the current README,
+   desktop package.json, app entry point, API layer, native command registration,
+   and design files. Respect existing user changes.
+2. Identify the current branch and commit. This prompt's repository findings are
+   a snapshot, not permission to overwrite newer work.
+3. Create docs/ui-redesign/IMPLEMENTATION_STATE.md with the template below.
+4. Save the behavioral spec into the repository, either as this prompt or an
+   equivalent complete specification, so it remains available after compaction.
+5. Establish baseline checks before claiming a failure was caused by your work.
+6. Inventory real capabilities. Distinguish implemented code, comments, mocks,
+   documented intent, and behavior verified on real machines.
+
+IMPLEMENTATION_STATE.md must contain:
+- Product: NodeDesk, free remote desktop, Google sign-in, saved PCs, one-click use.
+- Current milestone and next single task.
+- Source branch/commit and any pre-existing changes.
+- Design path and relevant screen numbers.
+- Architecture decisions and why they were made.
+- Exact files changed.
+- Scenario status: NOT STARTED / IN PROGRESS / PASS / FAIL / BLOCKED.
+- Evidence for each PASS: test name, command/result, or real-machine observation.
+- Known blockers with the missing dependency and actionable next step.
+- Test commands actually run, results, and environments.
+- Native features still requiring real-machine verification.
+- A short restart instruction: what to read and do next.
+
+At the end of every slice and before your context fills up, update that file.
+On every resumed run, read it first, then the specification sections relevant to
+the next task. Do not restart completed work or silently change prior decisions.
+If current code contradicts the progress log, inspect the code and correct the
+log; never treat a stale PASS as proof.
+
+Use durable scenario IDs from Section 09 in tests, progress, and handoffs.
+Do not mark a scenario PASS because you wrote a component named after it.
+Do not weaken tests to obtain a green result.
+Do not repeat a hardware test without a new change, failure, or unresolved reason.
+You may repeat automated regression checks when needed for the current slice.
+
+Your final implementation report must state what works, what remains blocked,
+which tests passed, and which behaviors were verified only in preview mode.
+Do not claim the whole product is complete until the required end-to-end journeys
+and their critical failure cases are verified.
+
+==========================================================================
+02. REPOSITORY FINDINGS: VERIFIED SNAPSHOT, NOT FEATURE PROMISES
+==========================================================================
+
+Inspected on 2026-10-04.
+Inspected branch: main.
+Inspected commit: ff07bf2e171b9d3c247fe6c971c75c602f882abe.
+At that commit, desktop package version is 1.3.0.
+
+The current desktop stack is Tauri 2 + React + TypeScript, with a Rust core.
+Frontend styling currently uses Tailwind. Lucide icons are already available.
+Frontend tests use Vitest and Testing Library.
+
+Important paths at the inspected commit:
+- apps/desktop/src/App.tsx: onboarding and screen selection.
+- apps/desktop/src/lib/api.ts: types, native command wrapper, browser mocks.
+- apps/desktop/src/screens/Onboarding.tsx: initial host/controller setup.
+- apps/desktop/src/screens/Dashboard.tsx: computers and pairing/manual addition.
+- apps/desktop/src/components/ComputerCard.tsx: current computer cards.
+- apps/desktop/src/screens/DeviceDetail.tsx: desktop/files/terminal/system tabs.
+- apps/desktop/src/screens/Settings.tsx: current settings and host access code.
+- apps/desktop/src/screens/Diagnostics.tsx: diagnostic UI.
+- apps/desktop/src-tauri/src/main.rs: Tauri commands and app setup.
+- apps/desktop/src-tauri/src/state.rs: persisted settings and OS keychain secrets.
+- apps/desktop/src-tauri/src/auth.rs: agent HMAC request authentication.
+- apps/desktop/src-tauri/src/agent.rs: agent HTTP endpoints.
+- apps/desktop/src-tauri/src/client.rs: authenticated agent requests.
+- apps/desktop/src-tauri/src/discovery.rs: discovery and reachability.
+- apps/desktop/src-tauri/src/sunshine.rs: Sunshine setup and pairing approval.
+- apps/desktop/src-tauri/src/moonlight.rs: external Moonlight process integration.
+- apps/desktop/src-tauri/src/files.rs: transfer logic and progress.
+- apps/desktop/src-tauri/src/safepath.rs: filesystem confinement.
+- apps/desktop/src-tauri/src/sim_test.rs: simulated two-machine tests.
+- docs/architecture.md, docs/networking.md, docs/security.md, docs/development.md.
+- .github/workflows/ci.yml: actual CI commands.
+
+Current behavior and important gaps:
+1. Browser development uses deterministic mock responses. Real desktop commands
+   run through Tauri. Successful mock responses do not prove hardware behavior.
+2. App.tsx routes onboarding, dashboard, device detail, settings, and diagnostics.
+   It does not contain the supplied Google login/account flow.
+3. auth.rs is request authentication for the local agent. It is NOT Google OAuth,
+   account sign-in, or a cloud account directory.
+4. The inspected desktop implementation has no Google sign-in, account-scoped
+   synchronized saved-computer list, or public nine-digit Device ID resolver.
+5. Current Computer.id is based on the host address. That is not a stable device
+   identity and must not become the new account/device identity.
+6. Existing addManualHost(address, code) uses a network address and access code.
+   Do not relabel those fields Device ID and pretend account lookup exists.
+7. Current forgetHost removes local saved metadata and its locally stored access
+   code. That is not account-wide removal or host-side revocation of a controller.
+8. connect_computer launches an external Moonlight process. The existing
+   stream-started event is emitted after starting that process; it is not proof
+   that the remote video/input session is ready.
+9. The supplied in-session toolbar therefore requires native integration work,
+   not just a React overlay hidden behind an unrelated fullscreen window.
+10. Files already have native list/send/download/cancel commands and progress
+    events, but the event shape lacks a transfer ID and the state has a shared
+    cancellation flag. A multi-row transfer queue needs stronger correlation.
+11. Clipboard settings exist, but the inspected stream argument builder does
+    not establish that the setting enforces the requested live clipboard policy.
+    Verify the actual upstream integration instead of relying on comments.
+12. Agent HMAC authenticates requests; it does not encrypt HTTP payloads. Do not
+    call a plain LAN HTTP file transfer encrypted. Sensitive channels need a
+    verified encrypted transport in the finished product.
+13. Networking currently centers on LAN and optional Tailscale integration.
+    Google login alone does not provide routing, NAT traversal, or a relay.
+14. The supplied trust list, per-session permissions, host remote-access switch,
+    account history, and runtime monitor/audio/quality controls need implementation
+    or capability verification. UI switches alone are insufficient.
+
+Re-read these paths before editing. Prefer source code and observed behavior to
+README claims when they disagree. Preserve working native capabilities while
+making the primary experience simpler.
+
+==========================================================================
+03. PRODUCT SCOPE AND NON-NEGOTIABLE RULES
+==========================================================================
+
+Required primary experience:
+- Google sign-in through a real identity integration.
+- Account-scoped saved computers synchronized between signed-in controllers.
+- Clear online/offline/unknown status with a reliable Connect action.
+- One-click connection after setup and authorization.
+- This Computer: identity, remote-access switch, unattended-access switch.
+- Incoming request: verified identity, Accept/Reject, permissions, expiration.
+- Real remote desktop with a reachable session toolbar.
+- Send/receive files and real progress.
+- Settings: account controls, trust, startup, quality, theme.
+- Useful empty, loading, unavailable, and failure states throughout.
+- Existing advanced functionality preserved where practical, behind Advanced.
+
+Free means:
+- No subscription, trial countdown, paid unlock, or commercial-use warning in
+  these core flows. Do not introduce pricing UI.
+- Prefer open-source components and a self-hostable account/control service.
+- Do not require a paid remote-desktop product or Windows Pro.
+- Keep the current software's license and upstream attribution requirements.
+- Do not claim hosting, relay bandwidth, or third-party services cost nothing.
+  Document actual infrastructure requirements and limits for the operator.
+- Never make the product's free promise depend silently on an external service's
+  pricing/terms. Verify current terms before selecting a dependency.
+
+Windows is first priority. Do not claim macOS/Linux host features work just
+because the mockup includes a MacBook name or because the project builds there.
+Detect platform capabilities and explain unsupported actions clearly.
+
+Keep all native behavior behind explicit, typed API boundaries. Screens must
+not directly invent backend state. Avoid a complete framework/streaming rewrite
+unless a documented capability spike proves the current integration cannot
+satisfy a required behavior.
+
+Privacy and control invariants:
+- Device IDs locate computers; they are not passwords or access grants.
+- Google authentication identifies an account; it does not by itself authorize
+  a new controller to access a host.
+- Same-account devices still need initial device authorization. Once trusted,
+  they connect without extra codes when unattended access is enabled.
+- Different-account visitors require explicit host approval for each session.
+  Proposed default: no persistent cross-account unattended grants in this release.
+- A host can reject, stop, disable, and revoke access locally.
+- Permissions are enforced by the host/native transport, including old paired
+  Moonlight clients and agent endpoints. Hiding a button is not enforcement.
+- Do not bypass existing pairing, certificate checks, replay protection, secret
+  storage, request throttling, filesystem restrictions, or license notices.
+- Do not place long-lived secrets in React state stores, settings.json,
+  localStorage, debug output, URLs, source control, or exported diagnostics.
+- Do not silently expose Sunshine/agent endpoints to the public internet.
+
+==========================================================================
+04. VISUAL IMPLEMENTATION: THE ATTACHED DESIGN IS THE REFERENCE
+==========================================================================
+
+The attachment is a design canvas containing eight app screens. It is NOT a
+single production page. Implement separate screens/routes inside NodeDesk.
+Do not ship the design canvas, its anchor links, DCLogic runtime, or support.js
+as the application. Rebuild the components with the repository's React/Tauri
+stack and use the design assets/tokens as the visual reference.
+
+Screen map:
+01 Login (#1a): split panel, Google action, Stay signed in.
+02 Home (#1b): sidebar, My Computers table, search, Add computer, recents.
+03 Computer actions (#1c): row menu and Add/Rename/Remove dialogs.
+04 This Computer (#1d): status, device name, Device ID, hosting switches.
+05 Incoming Connection (#1e): requester and per-session permissions.
+06 Remote Session (#1f): real desktop, floating toolbar and control panels.
+07 File Transfer (#1g): computer target, Send/Receive, drop zone, queue.
+08 Settings (#1h): account, trusted computers, unattended, startup, quality, theme.
+
+Design assets:
+_ds/modernist-5b64b3e8-b629-4c18-8971-93b036e446d0/styles.css
+_ds/modernist-5b64b3e8-b629-4c18-8971-93b036e446d0/readme.md
+
+Appearance:
+- Archivo heading/body typography, bold headings, Lucide icons.
+- Light background #f3f2f2; surfaces #eae9e9; text #201e1d.
+- Primary accent #ec3013 in light mode.
+- Dark reference: background #201e1d, surface #2d2b2b, text #f3f2f2,
+  accent #ff563c. Preserve contrast in dark mode.
+- Square corners, visible grid structure, major 2px dividers, subtle row rules.
+- Flush-left wide button labels, clear primary Connect actions.
+- Avoid the current rounded emerald dashboard-card style in the primary screens.
+- Use shared tokens/components. Do not scatter independent color values through
+  every page or build a parallel design system for each screen.
+- Use a darker accent ramp where paragraph-sized text needs more contrast.
+- Preserve hover, pressed, disabled, keyboard-focus, loading, and error states.
+
+The design names the product Simple Remote. Keep NodeDesk as the production
+brand unless the owner explicitly asks for a rename. Do not rename package IDs,
+app data folders, registry entries, updater identity, or protocol identifiers.
+The sample names, emails, IDs, spreadsheet, timestamps, latency, and transfers
+are fixture data. None belong in production as genuine user information.
+
+Layout:
+- The supplied windows are approximately 1180 x 760. Use that as the main visual
+  comparison size; also support the app's current minimum 720 x 560.
+- Sidebar navigation: My Computers, This Computer, File Transfer, Settings.
+- Sidebar account summary comes from the active account.
+- Handle overflow and smaller windows without hiding primary actions.
+- Native window controls must really minimize/maximize/close. Do not duplicate
+  fake title-bar buttons over an existing decorated Tauri window.
+- If using a custom title bar, implement real drag regions and accessible native
+  window actions and verify them on Windows.
+- Incoming and session controls must remain reachable at high DPI/fullscreen.
+- The mockup's remote desktop illustration is not a real streaming surface.
+
+Resolve mockup inconsistencies using one source of truth:
+- Stay signed in on Login and Settings is the same persisted preference.
+- Unattended access on This Computer and Settings is the same host policy.
+- Light/Dark applies to every NodeDesk-owned screen, not the host's streamed UI.
+- Offline recent tiles cannot connect just because the mockup has an anchor link.
+- Turning remote access off makes the device unavailable; explain the cause
+  instead of pretending the computer is physically powered off.
+
+==========================================================================
+05. DOMAIN DEFINITIONS: NEVER MIX THESE CONCEPTS
+==========================================================================
+
+Account: a backend-verified Google identity, keyed by provider issuer/subject,
+not merely by display name or email text.
+
+Local device: the machine currently running this NodeDesk instance, identified
+by persistent cryptographic/device identity. IP address changes do not change it.
+
+Public Device ID: proposed nine-digit human-readable lookup identifier displayed
+as three groups of three digits. Use server-side allocation/collision handling,
+preserve leading zeroes, rate-limit resolution, and do not treat it as a secret.
+Keep internal stable identity separate from this public lookup value.
+
+Enrollment: the owner explicitly associates the local device with an account.
+Account switching must not silently transfer device ownership.
+
+Saved computer: an account address-book entry pointing at a stable device.
+Owner devices appear after enrollment; approved shared devices can be saved.
+Saving a reference does not grant access.
+
+Discovery: finding a device's reachable network endpoint on LAN/tailnet/another
+verified route. A discovered device is not automatically saved or trusted.
+
+Trusted controller: a specific device identity the host has authorized. Trust
+is stored/enforced on the host; removing credentials only on the controller is
+not equivalent to revoking that controller on the host.
+
+Unattended access: host policy allowing already trusted owner controllers to
+connect without a person pressing Accept. Off by default.
+
+Attended access: a host-side person explicitly accepts a pending request and
+its permission set. Trust is not automatically created by Accept.
+
+Session: one authenticated remote-desktop connection, with its own ID, verified
+target, effective permissions, lifecycle, and timestamps.
+
+Transfer: one queued file operation, identified independently of its filename,
+with source/target device IDs, direction, total/acknowledged bytes, and state.
+
+Address-book removal: delete the saved entry from the active account on all its
+controllers. It does not uninstall NodeDesk, unclaim an owned host, or revoke
+every controller. Clearly describe that scope in the confirmation.
+Proposed rule: removing an enrolled owner device hides it using an account-level
+tombstone until explicitly added again; background enrollment sync must not
+immediately recreate the row. Retain ownership and host controls separately.
+
+Trust revocation: remove one controller's host-side authorization, reject future
+attempts, and terminate any active session/transfer authorized by that grant.
+These are separate operations with separate UI wording and tests.
+
+Proposed initial defaults:
+- Hosting remains off until the owner explicitly enables it.
+- Unattended access off.
+- New incoming request: screen viewing required for a desktop session; control,
+  files, and clipboard available to approve; audio off initially, matching the
+  permission mockup. Effective access is exactly what the host accepts.
+- Stay signed in on, visible and changeable before Google sign-in.
+- Quality Auto; preserve explicit settings from existing installations.
+- Light theme for new installations; preserve existing explicit preference.
+- One outgoing desktop session at a time in this release; do not silently kill
+  a running session when the user clicks another computer.
+- One incoming desktop session at a time; report Busy for a second request.
+- Transfers queued serially initially; independent transfer IDs and cancel
+  actions still required. Parallel transfer support is not necessary.
+
+Proposed engineering test constants (centralize/configure them):
+- Incoming approval expiry: 30 seconds from host-issued request deadline.
+- Host presence stale after 30 seconds without a verified heartbeat/update.
+- Connect attempt timeout: 30 seconds, except visible host approval waiting.
+- Reconnect: up to 3 attempts with delays of 1, 2, and 4 seconds; stop earlier
+  for denied/revoked access, disabled hosting, cancellation, or sign-out.
+These are requested product behaviors, not measured timings from the repository.
+Use fake clocks in tests. Do not hard-code countdowns independently in screens.
+
+==========================================================================
+06. USER JOURNEYS: IMPLEMENT THE WHOLE EXPERIENCE
+==========================================================================
+
+J1. FIRST-TIME OWNER SETUP AND FIRST SESSION
+User goal: remotely use my Windows Home PC from another computer.
+1. Install/open NodeDesk on the host. See Login with a clear Google action.
+2. Complete Google sign-in in the system browser and return to NodeDesk.
+3. Enroll the local device only after explicit owner consent.
+4. Open This Computer, check its name/Device ID, and enable remote access.
+5. Complete required host setup with visible progress and OS consent as needed.
+6. Leave unattended access off unless intentionally enabling it.
+7. Install/open NodeDesk on the controller and sign into the same account.
+8. See the enrolled host in My Computers once directory sync succeeds.
+9. Click Connect. If this controller is new, receive a real request on the host.
+10. Accept the controller with selected permissions, and separately authorize
+    persistent trust if requested. Establish underlying streaming pairing safely.
+11. See real remote video and use input only if control was granted.
+12. Disconnect and return to the same My Computers list.
+Success: a real two-computer session, with no manual IP/codec/port setup on a
+supported route. If network reachability/setup is missing, explain it honestly.
+
+J2. RETURNING OWNER: THE ONE-CLICK EXPERIENCE
+Preconditions: host reachable, hosting enabled, controller already authorized,
+unattended access on, account session valid.
+1. Open NodeDesk; restore sign-in safely.
+2. Load saved computers and current status.
+3. Click the remote computer's Connect action exactly once.
+4. Show connection progress, then its actual desktop.
+5. Work, optionally transfer a file, then Disconnect.
+Success: no repeated authentication dialog, pairing PIN, typed ID, or detail-page
+detour. One click starts the process; it does not promise zero network latency.
+
+J3. SAME ACCOUNT ON A BRAND-NEW CONTROLLER
+1. Sign in on a new laptop using the owner's Google account.
+2. See the existing saved list without importing files or typing host IDs.
+3. Click a host. The host confirms/authorizes this new controller once.
+4. After trust is established and unattended access enabled, later connections
+   follow J2. An attacker with a guessed Device ID cannot follow this journey.
+
+J4. HELP SOMEONE ELSE WITH THEIR COMPUTER
+1. The host enables remote access and shares its public Device ID.
+2. The helper opens Add computer, enters a name and the ID, then submits.
+3. Resolve the target through the actual directory. Save a reference only when
+   allowed; display pending authorization distinctly from trusted access.
+4. Connect sends the host a request with the helper's verified account/device.
+5. The host selects permitted actions and presses Accept or Reject.
+6. Accept opens only that session's granted capabilities; Reject/expiry ends it.
+7. On the next helper session, approval is required again in this release.
+Success: the owner controls access. The helper is not silently trusted forever.
+
+J5. SEND AND RECEIVE FILES
+1. Open File Transfer or Files in an active session.
+2. Choose a reachable, authorized target. Show direction explicitly.
+3. Send: browse/drop actual local files; receive: browse authorized remote files.
+4. Queue each operation with a unique transfer ID and real progress.
+5. If interrupted, offer Retry and resume only after checking file identity.
+6. Show Done only after destination confirmation; offer Open folder for downloads.
+Success: actual bytes arrive intact at the intended device, never at a newly
+selected target due to an asynchronous race.
+
+J6. NETWORK INTERRUPTION AND RECOVERY
+1. During an active session, connectivity is lost.
+2. Freeze/cover stale frames, disable remote input, and show Reconnecting.
+3. Attempt bounded recovery to the same verified device/session context.
+4. If permissions are still valid and recovery succeeds, resume the session.
+5. Otherwise show a useful failure with Retry and Back to My Computers.
+Success: no phantom Connected status, runaway retry loop, or stale input replay.
+
+J7. HOST DISABLES OR REVOKES ACCESS
+1. Owner turns remote access off or removes a trusted controller in Settings.
+2. Native host enforcement updates immediately, including existing paired paths.
+3. Active affected sessions/transfers terminate and pending requests are invalidated.
+4. The affected controller receives an accurate message and cannot auto-reconnect.
+Success: the switch and revocation change real access, not just a label.
+
+J8. SIGN OUT OR SWITCH GOOGLE ACCOUNT
+1. Choose Sign out or Switch account from Settings.
+2. If work is active, explain affected sessions/transfers and allow cancellation.
+3. On confirmation, stop account-authorized work and clear account credentials
+   and in-memory private data for this controller context.
+4. Reject late callbacks/events from the old account.
+5. Sign in as the new account and show only its saved list and authorization.
+6. Do not transfer ownership of This Computer or expose the old account's data.
+Success: two accounts cannot see or operate each other's device lists by accident.
+
+J9. CHANGE SETTINGS AND RETURN LATER
+1. Choose theme, default quality, startup, and sign-in persistence.
+2. Save each change with visible pending/success/failure behavior.
+3. Theme changes immediately across app-owned surfaces.
+4. Default quality affects new sessions; in-session quality is session-specific.
+5. Restart the app and verify retained preferences and valid account restoration.
+Success: visible switches reflect actual persisted or native-applied settings.
+
+==========================================================================
+07. REQUIRED STATE MODELS
+==========================================================================
+
+Keep account, host, session, and transfer state independent. Do not reuse one
+global loading/connected/error boolean for unrelated asynchronous operations.
+
+Authentication:
+restoring -> signedOut | signedIn | restoreError
+signedOut -> signingIn -> signedIn | signedOut | authError
+signedIn -> refreshing -> signedIn | reauthenticationRequired
+signedIn -> signingOut -> signedOut
+Every asynchronous response is associated with an account-generation/request ID.
+
+Saved-computer list:
+loading -> loaded | empty | loadError
+loaded -> refreshing -> loaded | staleWithError
+Search yields noMatches, which is different from no saved computers.
+Directory freshness and route reachability are separate facts.
+
+Host:
+disabled -> enabling -> ready | setupError
+ready -> disabling -> disabled
+Unsupported platform/capability is explicit, not an endless enabling state.
+Effective unattended access = hosting enabled AND saved unattended policy AND
+valid trusted-controller authorization. One shared policy powers both switches.
+
+Connection:
+idle -> resolving -> authorizing -> awaitingApproval (if needed) -> connecting
+-> connected -> reconnecting -> connected | failed
+Any pending state -> cancelling -> cancelled.
+connected -> disconnecting -> disconnected.
+Access denied/expired/revoked is terminal for that attempt; retries need a new
+explicitly valid request/grant. Approval expiry is separate from connection time.
+
+Transfers:
+queued -> preparing -> transferring -> verifying -> completed
+transferring -> interrupted -> retrying -> transferring | failed
+queued/preparing/transferring/interrupted -> cancelling -> cancelled.
+Record account ID, session/grant ID, transfer ID, source/target IDs, destination,
+file identity, acknowledged bytes, and last error. Do not correlate by name alone.
+
+Important implementation rules:
+- Await native mutation outcomes; do not immediately navigate away and pretend
+  success. On failure restore a truthful state and keep a retryable error.
+- Subscribe before starting operations that emit events.
+- Dispose listeners, abort requests where possible, and reject late events using
+  IDs/epochs, including callbacks after unmount and account switching.
+- Cancellation is enforced by the native/backend operation, not only the UI.
+- Connect errors must not mark a device permanently offline without evidence.
+- When the route's address changes, retain device identity and authorization.
+
+==========================================================================
+08. API AND ARCHITECTURE REQUIREMENTS
+==========================================================================
+
+Extend the current API boundary with typed domain operations. The names below
+describe contracts, not a requirement to use these exact method names.
+
+Account operations:
+getAuthState, signInWithGoogle, signOut, switchAccount,
+setStaySignedIn, refreshAccountSession.
+
+Device/directory operations:
+enrollLocalDevice, getLocalDeviceIdentity, listSavedComputers,
+resolveDeviceId, addSavedComputer, renameSavedComputer, removeSavedComputer,
+getPresence, subscribeDirectoryChanges.
+
+Host/authorization operations:
+getHostStatus, setRemoteAccessEnabled, setUnattendedAccessEnabled,
+listTrustedControllers, authorizeController, revokeTrustedController,
+acceptIncomingRequest, rejectIncomingRequest.
+
+Session operations:
+startSession, cancelConnectionAttempt, disconnectSession, getSessionState,
+getSessionCapabilities, listRemoteDisplays, selectRemoteDisplay,
+setSessionQuality, setClipboardEnabled, sendClipboard, receiveClipboard,
+setAudioEnabled, setAudioVolume.
+
+Transfers:
+listRemoteFiles, chooseLocalFiles, enqueueSend, enqueueReceive,
+cancelTransfer(transferId), retryTransfer(transferId), subscribeTransferProgress.
+
+All mutations identify the correct account/device/session/operation and return
+structured success or meaningful errors. Do not let a generic stream event for
+host A update the state of host B. Backend commands must independently validate
+authorization, even when called outside the rendered UI.
+
+Google sign-in:
+- Implement a supported system-browser OAuth/OIDC flow for a desktop app.
+- Use the appropriate public-client flow with PKCE/state and OIDC validation
+  where applicable; no embedded Google password capture or desktop client secret.
+- Bind the callback to the initiated attempt, validate identity on the trusted
+  service side, and use minimal account/profile scopes.
+- Store refresh/long-lived credentials through OS secure storage.
+- Provide a sample configuration and exact setup documentation without real
+  credentials. Missing client configuration must produce a truthful setup error.
+- Account access tokens must not become universal device-control credentials.
+- Consult current primary Google/provider documentation before implementing.
+
+Account directory/control service:
+- Inspect for an existing service first. If missing, add a minimal self-hostable
+  service with a documented authentication/device-identity model and migrations.
+- Select its stack based on existing code and a short written decision; do not
+  add several competing backends or a paid SaaS requirement.
+- Server-enforce account isolation, directory access, device enrollment/claims,
+  request expiration, rate limiting, and signed/verified device grants.
+- Presence indicates verified freshness; it does not prove streaming readiness.
+- Keep secret material out of directory responses. Do not sync host access
+  secrets as ordinary saved-computer metadata.
+- Device ownership changes require an explicit authorization flow. They are not
+  a side effect of signing into a different Google account.
+- Add realistic two-account/two-controller integration fixtures.
+
+Streaming capability spike:
+- Verify how the current external Moonlight client can provide lifecycle events,
+  actual readiness, a reachable NodeDesk toolbar, monitor selection, effective
+  clipboard/audio controls, quality changes, and host-side permission enforcement.
+- If upstream cannot provide required control, document the smallest integration
+  change needed. Reuse the proven streaming technology; do not substitute a fake
+  video, iframe, static screen, or browser-only demonstration.
+- Do not claim an embedded viewer or live toolbar is finished if the only working
+  path is launching an unmodified separate window without the required controls.
+- A separate real viewer may be an explicitly documented interim milestone.
+  The final supplied session design remains an acceptance requirement.
+- Process creation is not session readiness. Observe stream/handshake readiness
+  through a verified native signal and handle process exit during connection.
+
+Networking:
+- Preserve verified LAN and available Tailscale routes while adding account UX.
+- Resolve stable device identity to a current verified route; never trust an IP
+  solely because an old address-book entry used it.
+- For working internet access, use a demonstrated secure route. Report Tailscale
+  setup requirements honestly if that is the initial route.
+- Do not label account synchronization as anywhere connectivity.
+- A no-extra-network-setup internet mode needs separate signaling, NAT traversal,
+  and/or relay implementation. Evaluate compatibility with Sunshine/Moonlight;
+  do not casually assume WebRTC/TURN transports their existing protocol.
+- Track automatic internet connectivity as a distinct milestone and do not
+  claim TeamViewer-like anywhere behavior until different-network testing passes.
+- Do not automatically configure public port forwarding or weaken TLS checks.
+
+Compatibility:
+- Migrate persisted settings additively. Missing new fields get safe defaults.
+- Preserve old local hosts, codes in OS keychain, and working pairing where safe.
+- Do not infer new account/device trust from an old display name or IP address.
+- Give migrated devices an explicit claim/authorization step if needed.
+- Keep legacy LAN use reachable under a secondary local/advanced mode; this is a
+  proposed compatibility path, not a reason to omit the required Google journey.
+- Local mode must not inherit cloud-account permissions after sign-out.
+
+==========================================================================
+09. BDD ACCEPTANCE SPECIFICATION
+==========================================================================
+
+Read these as Given / When / Then behaviors. Implement automated tests where
+possible and identify required real-machine checks. Each scenario is independent
+unless it explicitly says a precondition is already established.
+
+Use fixed fixture identities in tests only:
+- Account A: owner of Host H and Controller C1.
+- Account B: helper on Controller C2.
+- Controller C3: brand-new device signed into Account A.
+- Host H: Windows 11 Home, public ID 482 913 705, hosting ready.
+- Host O: saved offline computer.
+- Host X: another account's computer, not shared with Account A.
+Fixture emails/names are not production defaults. Do not use real credentials.
+
+FEATURE A: LOGIN AND ACCOUNT LIFECYCLE
+
+Scenario AUTH-01: First launch shows the real login entry point
+Given no valid account session exists and local mode has not been selected
+When NodeDesk opens
+Then I see the Login design with Continue with Google and Stay signed in
+And I do not see another account's computers, example computers, or fake profile.
+
+Scenario AUTH-02: Successful Google sign-in opens my account
+Given a correctly configured Google integration and a signed-out app
+When I complete sign-in in the system browser
+Then NodeDesk accepts only the callback bound to that sign-in attempt
+And the backend verifies the identity
+And My Computers loads saved entries belonging to the verified account
+And the account summary shows verified profile information.
+
+Scenario AUTH-03: User cancels browser sign-in
+Given Google sign-in is in progress
+When I cancel it or dismiss the provider flow
+Then I remain signed out with a usable Continue with Google action
+And no profile, account directory, or device grant is created.
+
+Scenario AUTH-04: Failed and duplicate login attempts
+Given sign-in is in progress
+When I click Continue with Google repeatedly or the provider fails
+Then at most one active sign-in attempt exists
+And errors offer a retry without leaving an endless spinner
+And a late callback from a cancelled attempt cannot sign me in.
+
+Scenario AUTH-05: Stay signed in has real semantics
+Given I sign in with Stay signed in enabled
+When I close and reopen NodeDesk
+Then an eligible session is restored using securely stored credentials
+But if I signed in with Stay signed in disabled
+Then a later fresh app launch requires account sign-in again
+And no durable refresh credential was retained for automatic restoration.
+
+Scenario AUTH-06: Invalid identity callback is rejected
+Given a login attempt is pending
+When a callback has an invalid state, expired/reused code, or unverifiable identity
+Then I remain signed out
+And no saved list or device access becomes available
+And no sensitive callback/token value appears in the error or diagnostic export.
+
+Scenario AUTH-07: Restore/refresh failures are truthful
+Given stored credentials exist
+When restoration fails temporarily or the refresh grant is rejected
+Then temporary network failure offers retry with account data marked stale
+And invalid/revoked credentials require reauthentication
+And no new account-backed access grant is issued from an invalid session.
+
+Scenario AUTH-08: Account isolation after switching
+Given Account A is active and Account B has a different saved list
+When I confirm Switch account and sign into B
+Then only B's profile, directory, recents, and authorized operations are shown
+And late events/responses for A are discarded
+And This Computer is not silently re-enrolled to B.
+
+Scenario AUTH-09: Sign-out with active work
+Given an outgoing session or transfer is active
+When I select Sign out
+Then I can cancel the sign-out or confirm the explained interruption
+When I confirm
+Then that account's outgoing work ends and its local auth credentials are cleared
+And no automatic reconnect or queued transfer continues under the old account.
+
+Scenario AUTH-10: Sign-out does not leave invisible host access
+Given this local device is enrolled to Account A and hosting is enabled
+When I confirm account sign-out
+Then hosting is disabled by default and account-authorized incoming work ends
+And device ownership remains A until an explicit authorized ownership change
+And any future local-only hosting requires its own explicit setup/consent.
+
+FEATURE B: MY COMPUTERS, SEARCH, HISTORY, AND SYNC
+
+Scenario LIST-01: Saved devices synchronize after sign-in
+Given Account A saved Host H on C1
+When Account A signs in on C3 and directory synchronization succeeds
+Then H appears on C3 without typing its ID/IP or importing a configuration file
+And H does not become trusted to C3 merely because it appears in the list.
+
+Scenario LIST-02: No saved computers is an actionable empty state
+Given the account's directory loaded successfully with zero entries
+When My Computers is displayed
+Then I see an explanation and Add computer/setup actions
+And I do not see fixture rows or a misleading error state.
+
+Scenario LIST-03: Loading and load failure remain distinguishable
+Given the directory request has not completed
+When I view My Computers
+Then I see loading placeholders rather than an empty-account claim
+When the request fails
+Then I see Retry and an understandable error
+And any retained list is marked stale rather than silently presented as current.
+
+Scenario LIST-04: Search handles names and formatted IDs
+Given Host H has ID 482 913 705 and a saved name Office PC
+When I search for office, 482913705, or 482 913 705
+Then H matches regardless of letter case or ID grouping spaces
+And the search count reflects the filtered results.
+
+Scenario LIST-05: No matches is not no saved computers
+Given the account has saved computers
+When the search matches none
+Then I see No computers match your search and a way to clear it
+And clearing the query restores the saved list without losing entries.
+
+Scenario LIST-06: Status does not authorize access
+Given H has a fresh heartbeat but C3 is not trusted
+When H is shown as Online
+Then Connect starts the required approval flow
+And being Online does not silently bypass authorization.
+
+Scenario LIST-07: Offline and stale presence prevent misleading actions
+Given O is confirmed offline or H's last verified presence is older than 30 seconds
+When the status is rendered
+Then O shows Offline and stale H shows an unavailable/unknown checking state
+And Connect is disabled with a visible reason until a valid route/status exists
+And the list distinguishes a stale directory from confirmed offline state.
+
+Scenario LIST-08: Presence changes during a click are handled safely
+Given H was Online when the button was rendered
+When I click Connect after H becomes unreachable
+Then the real connection attempt fails with a useful Retry message
+And no fake session is opened or permanent trust change is made.
+
+Scenario LIST-09: Real recents use successful session history
+Given a session to H reached actual Connected and later ended
+When I return to My Computers
+Then recent history records H with real start time/duration
+And a failed or rejected attempt does not count as a successful connection
+And selecting an offline recent entry cannot bypass disabled Connect logic.
+
+Scenario LIST-10: Public identity survives address changes
+Given H is saved and authorized and its LAN IP changes
+When discovery/directory updates its verified route
+Then the same saved H row and public Device ID remain
+And the old address cannot cause a different device to inherit H's access.
+
+Scenario LIST-11: Current computer is not a remote target
+Given the list includes the local device's account entry
+When I view that row
+Then it is labeled This computer and offers local management instead of self-connect
+And other remote entries retain their normal Connect actions.
+
+FEATURE C: ADD, RENAME, AND REMOVE COMPUTERS
+
+Scenario DEVICE-01: Add dialog explains the actual identifier
+Given I choose Add computer
+When the dialog opens
+Then it asks for Computer name and Device ID
+And explains where to find the ID under This Computer on the other machine
+And keyboard focus starts in the form.
+
+Scenario DEVICE-02: Add validates and normalizes input
+Given the Add dialog is open
+When I enter a blank/whitespace-only name, malformed ID, or this device's own ID
+Then submission is rejected with field-specific guidance
+But a valid nine-digit ID with leading zeroes/spaces is normalized without losing
+digits and does not require an IP address or secret in that field.
+
+Scenario DEVICE-03: Device ID resolution is real
+Given a valid public Device ID exists in the configured directory
+When I submit Add computer
+Then the service resolves a stable target identity and permitted public metadata
+And the address-book save completes once
+And no access grant is created merely by knowing that ID.
+
+Scenario DEVICE-04: Unknown ID, duplicate, and lookup failure
+Given Add computer is open
+When the ID cannot be resolved, is already saved, or the service is unavailable
+Then I see the appropriate usable error or existing entry
+And no duplicate row or fabricated Online status is created
+And rapid repeated submissions do not create multiple entries.
+
+Scenario DEVICE-05: Cancelled addition ignores late results
+Given a lookup/save is pending
+When I cancel the dialog
+Then pending work is cancelled where possible and late UI responses are ignored
+And if a server-side save already committed, subsequent sync truthfully reconciles
+it rather than inventing a rollback that did not occur.
+
+Scenario DEVICE-06: Rename updates the saved alias across my devices
+Given H is saved on Account A's controllers
+When I save a valid new name for H
+Then the account alias updates on each controller after synchronization
+And H's internal identity, public ID, permissions, and physical hostname remain
+unchanged unless a separate local-device rename was explicitly requested.
+
+Scenario DEVICE-07: Rename failure preserves the old name
+Given H has a saved name
+When a rename is invalid or the persistence request fails
+Then the dialog retains a correctable error
+And the previously persisted name is not falsely shown as successfully changed.
+
+Scenario DEVICE-08: Account-wide Remove uses clear scope
+Given H is saved and no outgoing work to it is active
+When I confirm Remove in its dialog
+Then H disappears from this account's saved list and recents on all controllers
+And background owner-device sync respects the removal tombstone
+And the dialog explains that removal does not uninstall or change host trust.
+
+Scenario DEVICE-09: Remove during active work is explicit
+Given H has an outgoing session or transfer from this app
+When I choose Remove
+Then the confirmation explains that this app's affected work will end
+And Cancel leaves the entry and work intact
+When I confirm and the server commits removal
+Then this app ends affected work and ignores reconnect attempts for that entry.
+
+Scenario DEVICE-10: Removal failure and re-addition
+Given removing H fails at the service
+When the result returns
+Then H remains saved with a retryable error
+But after a successful removal
+When I explicitly add H again using its ID
+Then the tombstone is cleared and H returns without silently creating new trust.
+
+FEATURE D: THIS COMPUTER, ENROLLMENT, AND HOST POLICY
+
+Scenario HOST-01: Stable device identity and correct Copy ID
+Given the local device is enrolled
+When I open This Computer and choose Copy ID
+Then its persistent public ID is displayed in grouped form
+And only that ID is copied after clipboard write succeeds
+And restarting NodeDesk or changing IP does not change that identity.
+
+Scenario HOST-02: Enrolling requires owner consent
+Given a local device has not been enrolled
+When I sign in and view This Computer
+Then I can explicitly enroll it to the verified account
+And a failed enrollment cannot report a valid registered ID or ready hosting
+And signing in alone does not automatically enable remote access.
+
+Scenario HOST-03: Enable hosting only becomes ready after native setup
+Given hosting is disabled
+When I enable remote access
+Then NodeDesk performs required installation/configuration with visible progress
+And respects necessary OS approval prompts
+And Accepting connections appears only after actual host readiness
+And cancelling/failing setup yields an actionable error without false Online state.
+
+Scenario HOST-04: Disable hosting enforces a real denial
+Given hosting is ready with an active session and pending request
+When I turn Enable remote access off
+Then the host stops accepting authenticated remote work through all supported paths
+And existing sessions/transfers end and pending approvals are invalidated
+And controllers see remote access is off/unavailable
+And old paired clients cannot bypass the disabled policy.
+
+Scenario HOST-05: Unattended depends on remote access
+Given remote access is off
+When I view unattended controls on This Computer or Settings
+Then both are disabled with Turn on remote access first guidance
+And the saved preference cannot create effective access while hosting is disabled.
+
+Scenario HOST-06: Both unattended switches reflect one persisted policy
+Given hosting is enabled
+When I turn unattended access on in This Computer
+Then Settings shows the same state after the native policy update succeeds
+And it survives restart
+And a failed save does not leave conflicting switches across the two screens.
+
+Scenario HOST-07: New same-account device needs initial authorization
+Given unattended access is on but C3 has never been trusted by H
+When C3 requests a connection to H
+Then H requires initial authorization/pairing
+And Account A sign-in alone cannot bypass that step
+But after trust is established, later valid C3 connections can follow J2.
+
+Scenario HOST-08: Unsupported capability and host failure are visible
+Given a required host feature is unsupported, missing, or the service has stopped
+When I view This Computer
+Then status explains the actual problem and offers an applicable retry/setup action
+And no unsupported control remains visually enabled with fake success behavior.
+
+FEATURE E: INCOMING CONNECTION AND PERMISSIONS
+
+Scenario APPROVAL-01: Request identity is verified and host-visible
+Given H requires attended approval and C2 requests access
+When the request arrives
+Then H displays verified requester account/device information and New device when
+appropriate, selected permission controls, Accept/Reject, and actual time remaining
+And requester-controlled display strings alone cannot establish trust.
+
+Scenario APPROVAL-02: Reject prevents every access channel
+Given a valid request is pending
+When the host presses Reject
+Then no desktop, input, file, clipboard, audio, or terminal capability is granted
+And the controller sees that access was declined
+And no trusted entry is automatically created.
+
+Scenario APPROVAL-03: Request expiration is enforced by the host
+Given a request has a host-issued 30-second deadline
+When the deadline passes without acceptance
+Then the host invalidates it and the controller sees Request expired
+And a delayed Accept/callback cannot reopen the expired request
+And background/window inactivity does not pause the actual deadline.
+
+Scenario APPROVAL-04: Accept and expiry race has one result
+Given a request is at its deadline
+When Accept and expiry are processed concurrently
+Then exactly one valid host-side decision wins
+And the UI reconciles that result instead of opening an unauthorized session.
+
+Scenario APPROVAL-05: View-only really blocks remote input
+Given the host accepts screen viewing with keyboard/mouse control off
+When the controller sees the remote desktop and attempts clicks/typing
+Then it can view the screen but cannot inject input
+And the UI clearly says View only
+And direct native calls/previously paired clients cannot bypass that permission.
+
+Scenario APPROVAL-06: Denied file/clipboard/audio permissions are enforced
+Given the host accepts a session with files, clipboard, and audio all off
+When the controller tries toolbar actions or direct API calls for those features
+Then the host rejects them and no file/clipboard/audio data crosses the channel
+And controls explain that the host did not permit the capability.
+
+Scenario APPROVAL-07: Acceptance is bound to target and attempt
+Given requests from C1 and C2 have different IDs
+When the host accepts C1's request
+Then only C1's corresponding session and approved permissions are authorized
+And C2, a cancelled attempt, or a mismatched device identity cannot reuse it.
+
+Scenario APPROVAL-08: Controller cancellation invalidates pending approval
+Given C2 is waiting for approval
+When C2 cancels or signs out
+Then H dismisses/invalidates that request
+And a later host Accept cannot open a session for the cancelled controller attempt.
+
+Scenario APPROVAL-09: Busy host does not create conflicting sessions
+Given H already has an incoming desktop session
+When another controller requests a new one
+Then it gets a clear Busy response or host-controlled explicit replacement flow
+And H never silently hands input control to two sessions in this initial release.
+
+Scenario APPROVAL-10: Accept is not permanent trust
+Given Account B's helper is accepted for one attended session
+When that session ends and the helper requests another
+Then the host must approve again
+And the helper has not been added to unattended trusted devices by Accept alone.
+
+FEATURE F: CONNECTION AND REAL SESSION LIFECYCLE
+
+Scenario SESSION-01: Trusted owner starts a session with one click
+Given H is ready/reachable, C1 trusted, unattended on, and Account A valid
+When I click H's Connect once in My Computers
+Then a single authorized connection attempt starts directly
+And I see progress and then H's actual desktop
+And I do not visit an extra detail page or enter another ID/PIN/access code.
+
+Scenario SESSION-02: Process launch is not Connected
+Given Moonlight was launched but no session-readiness evidence exists
+When the command returns or a process-start event arrives
+Then the session remains Connecting
+And only a verified stream-ready signal transitions it to Connected
+And process exit before readiness produces a failure instead of a success toast.
+
+Scenario SESSION-03: Repeated Connect creates one attempt
+Given an attempt to H is pending
+When I double-click or repeatedly activate Connect
+Then only one attempt/session ID and one native launch are active
+And the UI shows progress with Cancel rather than spawning duplicate viewers.
+
+Scenario SESSION-04: Timeout and native failure have a usable exit
+Given a connection cannot complete
+When the attempt reaches the configured 30-second timeout or native startup fails
+Then the attempt is stopped and I see a useful explanation with Retry and Back
+And I am not left in a fullscreen blank window or endless spinner.
+
+Scenario SESSION-05: Cancel stops work and ignores late success
+Given a connection/authorization attempt is pending
+When I choose Cancel
+Then native/backend cancellation runs and pending approvals are invalidated
+And a late event for that attempt cannot reopen a viewer or mark it Connected.
+
+Scenario SESSION-06: One outgoing session requires explicit replacement
+Given I have an active session to H
+When I request a different computer
+Then I can return to H or confirm ending it before starting the new session
+And cancelling leaves H usable
+And no child process is leaked or overwritten in the stream-state handle.
+
+Scenario SESSION-07: Short network loss recovers safely
+Given an authorized active session loses connectivity
+When automatic recovery runs
+Then remote input is suspended and stale frames are labeled/covered
+And attempts follow the bounded 1/2/4-second schedule
+And recovery reconnects only to the same verified target with still-valid access
+And old queued keyboard/mouse input is discarded.
+
+Scenario SESSION-08: Revocation defeats automatic reconnect
+Given a disconnected session is retrying
+When the host revokes its grant or disables remote access
+Then retry stops immediately on that authoritative denial
+And no cached trust or old pairing reopens the connection.
+
+Scenario SESSION-09: Disconnect ends the actual session
+Given the desktop is connected
+When I choose Disconnect
+Then the actual streaming/input/audio/clipboard session ends
+And I return to My Computers without signing out
+And the session duration is finalized once
+And subsequent remote input cannot be sent.
+
+Scenario SESSION-10: Host stops session locally
+Given H has an active remote session
+When the host owner uses a persistent local Stop session action
+Then the controller loses all that session's capabilities
+And the host retains a visible record/status of the ended session
+And the controller cannot resume that attended grant without new approval.
+
+Scenario SESSION-11: Viewer exit and app close are reconciled
+Given a real viewer process is active
+When it exits/crashes or I close the controller application
+Then session state and native cleanup match the actual result
+And account-authorized outgoing sessions/transfers are stopped on app close
+And no orphaned stream remains under a stale Connected flag.
+
+FEATURE G: TOOLBAR, MONITORS, QUALITY, CLIPBOARD, AUDIO
+
+Scenario TOOLBAR-01: Toolbar is reachable over the actual viewer
+Given H's real desktop is displayed in fullscreen
+When I need session controls
+Then NodeDesk's toolbar is visible or can be reliably revealed by pointer/keyboard
+And it identifies the correct target and offers Disconnect
+And it is not hidden behind a separate fullscreen Moonlight window.
+
+Scenario TOOLBAR-02: Display selection uses real capabilities
+Given H reports two actual accessible displays
+When I choose the second display
+Then the real stream changes to that display and its reported resolution
+And permission/session context remains valid
+And failure restores the previous selection with an error
+And the UI never invents Monitor 2 on a one-display host.
+
+Scenario TOOLBAR-03: Session quality affects the native stream
+Given the stream supports quality reconfiguration
+When I select Auto, Best speed, Balanced, or Best quality
+Then a documented native quality policy is actually applied
+And the selected indicator changes only after success
+And an unsupported live switch offers a clear controlled restart/reconnect flow
+instead of changing a label while leaving the stream unchanged.
+
+Scenario TOOLBAR-04: Live statistics are measured
+Given a session is active
+When I see resolution, FPS, and latency values
+Then they come from the active session's available measurements
+And unavailable measurements show an honest placeholder
+And the mockup's 24 ms and 30 fps are never production constants.
+
+Scenario TOOLBAR-05: Clipboard toggle gates automatic synchronization
+Given clipboard permission is granted
+When I turn Share clipboard off
+Then automatic clipboard synchronization stops in both directions
+And re-enabling it does not send old cached clipboard content unexpectedly
+And clipboard data is never persisted to history/logs or exposed to another session.
+
+Scenario TOOLBAR-06: Manual clipboard actions respect permission
+Given automatic clipboard synchronization is off but clipboard permission exists
+When I explicitly choose Send to remote or Get from remote
+Then only the current requested clipboard content is transferred
+But if the host denied clipboard permission
+Then both automatic and manual clipboard transfer are blocked by the host.
+
+Scenario TOOLBAR-07: Audio mute and volume are real controls
+Given audio permission exists and audio output is supported
+When I turn Hear remote audio off or change volume
+Then actual playback mutes or changes to the selected 0-100 level
+And no changes affect the host's own local volume unless explicitly specified
+And denial/unsupported output is explained instead of producing fake success.
+
+Scenario TOOLBAR-08: Files opens the right authorized target
+Given an active session to H with file permission
+When I select Files in the toolbar
+Then File Transfer opens with H selected and the session/grant context preserved
+And switching the UI to another target does not retarget already queued transfers.
+
+FEATURE H: FILE TRANSFER
+
+Scenario FILE-01: Send uses actual selected local files
+Given H is reachable and file access authorized
+When I select Send and browse/drop two local files
+Then each file becomes an operation with a unique transfer ID and H as target
+And the native transfer sends real bytes
+And the UI does not treat a browser file name as a usable native filesystem path.
+
+Scenario FILE-02: Receive browses allowed remote paths
+Given H grants file access
+When I choose Receive and browse H
+Then only permitted remote paths can be listed/read
+And a selected file downloads to the configured local Downloads/NodeDesk location
+And its completed entry can open the real destination folder.
+
+Scenario FILE-03: Progress reports acknowledged bytes
+Given a nonempty file is transferring
+When progress events arrive
+Then displayed progress is based on acknowledged bytes divided by total bytes
+And percent stays within 0-100 and never advances on a fake timer
+And unknown speed/time remaining is shown honestly
+And Done requires destination completion/verification, not just a filled bar.
+
+Scenario FILE-04: Empty files and same-name files do not corrupt the queue
+Given a zero-byte file and two unrelated files share a basename
+When they are queued
+Then zero-byte completion has no division error
+And every operation is tracked by its ID and destination
+And filename alone never merges or updates the wrong queue row.
+
+Scenario FILE-05: Cancelling one item does not cancel another
+Given files F1 and F2 are queued/active
+When I cancel F1
+Then only F1's native operation is cancelled and marked Cancelled
+And F2 can proceed
+And late F1 events cannot report Done after cancellation.
+
+Scenario FILE-06: Retry/resume verifies file identity
+Given an interrupted file has partially arrived
+When I Retry
+Then resume is allowed only for the same source version, destination, and content
+identity; mismatch safely restarts or asks the user
+And same filename/size alone is insufficient proof
+And the finished destination matches the source bytes.
+
+Scenario FILE-07: Destination conflict is explicit
+Given a completed different file already uses the target filename
+When another file is sent/received there
+Then I can choose overwrite, keep both, or cancel according to a defined policy
+And it is never silently appended/resumed merely because it exists
+And cancelled/conflicting writes do not corrupt the previous completed file.
+
+Scenario FILE-08: Folder transfer is truthful
+Given the Send UI says files or folders can be dropped
+When I drop a folder
+Then actual recursive transfer preserves supported relative paths with progress
+And symlinks/traversal cannot escape permitted roots
+But if folder support is not implemented yet
+Then folder selection is clearly rejected and the UI does not claim it is done.
+Note: folder support is required to keep the supplied design's folder claim.
+
+Scenario FILE-09: Interrupted routes and revoked access stop safely
+Given a transfer is active
+When the target goes offline or file permission is revoked
+Then it becomes Interrupted/Failed with an accurate reason
+And authorization denial is not retried automatically
+And partial files are distinguishable from completed files.
+
+Scenario FILE-10: Target/account changes cannot redirect old work
+Given an operation to H was queued under Account A
+When I select another target or switch to Account B
+Then the old operation retains H and A or is cancelled according to sign-out rules
+And no late progress or completion appears as B's transfer or writes to the new target.
+
+Scenario FILE-11: Filesystem failures remain per-operation
+Given a file is unreadable, the target path is forbidden, or destination space runs out
+When transfer starts/writes
+Then that operation reports the actual useful failure
+And unrelated queued items are not falsely marked failed/completed
+And original source and completed destination files are preserved.
+
+FEATURE I: SETTINGS AND TRUST MANAGEMENT
+
+Scenario SETTINGS-01: Account controls match Login
+Given I am signed in
+When I view Settings
+Then its profile comes from the current account
+And Stay signed in represents the same preference used on Login
+And disabling it removes durable restoration credentials without immediately
+pretending a currently valid in-memory session has signed out.
+
+Scenario SETTINGS-02: Theme changes all app-owned surfaces and persists
+Given Light mode is active
+When I select Dark
+Then sidebar, dialogs, login, incoming request, settings, file transfer, and session
+toolbar use shared dark tokens immediately and survive restart
+And the remote computer's desktop/theme is not changed.
+
+Scenario SETTINGS-03: Default quality applies to new sessions
+Given the default is Balanced and an active session uses its own override
+When I save default Best speed
+Then subsequent sessions start with that policy
+And the current session retains its override until changed from its toolbar.
+
+Scenario SETTINGS-04: Start with Windows changes native startup behavior
+Given Windows startup integration is supported
+When I toggle Start with Windows
+Then the actual startup registration changes and survives restart
+And failure restores a truthful state with a useful error
+And starting at user sign-in is not mislabeled as guaranteed pre-login hosting.
+
+Scenario TRUST-01: Trusted list comes from host authorization
+Given H has authorized C1 but merely saved C2 in an address book
+When I inspect H's Trusted computers list
+Then C1 is present and C2 is not
+And entries identify actual controller identities, not just duplicate display names.
+
+Scenario TRUST-02: Revoke one trusted controller immediately
+Given C1 and C3 are trusted by H and C1 is active
+When the host owner confirms removing C1 from Trusted computers
+Then H revokes only C1's grant and terminates its session/authorized transfers
+And C1 cannot reconnect through cached pairing/access paths
+And C3 remains trusted unless a separate policy change is made.
+
+Scenario TRUST-03: Revocation failure is not false success
+Given revocation cannot be applied to the authoritative host
+When I attempt to remove a trusted entry
+Then the UI reports pending/failed revocation accurately
+And it does not promise that access has ended until the host acknowledges it
+And a retry is offered without revoking unrelated controllers.
+
+FEATURE J: SECURITY, COMPATIBILITY, AND ACCESSIBILITY
+
+Scenario SECURITY-01: Account directory is enforced on the service
+Given Account A is authenticated and X belongs only to Account B
+When A requests B's saved list, history, enrollment record, or restricted device detail
+Then the service denies access regardless of manipulated frontend parameters
+And A's UI cannot retrieve B's private data.
+
+Scenario SECURITY-02: Knowing an ID grants no privilege
+Given a caller knows H's public Device ID but lacks a valid host grant
+When it calls desktop/input/files/clipboard/power/terminal operations
+Then each privileged path independently rejects it
+And lookup/rate limiting prevents unrestricted enumeration of private metadata.
+
+Scenario SECURITY-03: Authentication does not masquerade as encryption
+Given sensitive file, clipboard, terminal, account, or control payloads are exchanged
+When production traffic uses a supported route
+Then the sensitive data is protected by a verified encrypted transport
+And HMAC on plaintext HTTP is not described/tested as payload encryption
+And invalid identity/certificates are not accepted by weakening global validation.
+
+Scenario SECURITY-04: Secrets are absent from normal output
+Given sign-in, pairing, transfer, and errors occurred
+When I inspect settings JSON, browser storage, logs, and exported diagnostics
+Then no tokens, host secrets, private keys, or clipboard contents are present
+And diagnostics remain useful through redacted identifiers/errors.
+
+Scenario SECURITY-05: Existing local safeguards remain effective
+Given replay, unauthorized agent requests, brute-force attempts, and path traversal
+were blocked before the redesign
+When the new account/session flows are added
+Then those attacks remain blocked through automated regression tests
+And new permissions are enforced on the native endpoints as well as in React.
+
+Scenario COMPAT-01: Existing installations migrate safely
+Given a previous settings file and locally trusted host exist
+When the upgraded NodeDesk starts
+Then it preserves compatible preferences and securely stored credentials
+And new missing fields receive safe defaults
+And claiming/syncing a legacy host does not infer ownership from IP/name alone.
+
+Scenario COMPAT-02: Windows Home works without RDP Pro
+Given two supported Windows machines including a Windows Home host
+When I complete J1/J2
+Then real video and permitted input use the existing streaming foundation
+And no Windows Pro purchase, RDP patch, or proprietary remote-desktop license is required.
+
+Scenario NETWORK-01: Same-network route is actually verified
+Given H and C1 are on the same LAN with valid authorization
+When C1 connects
+Then the resolved route reaches H's verified identity and real streaming works
+And discovery alone is not reported as a successful desktop session.
+
+Scenario NETWORK-02: Different-network access has real transport
+Given H and C1 are on different internet connections with a configured supported route
+When C1 connects from its saved H row
+Then actual video/input/files work over that secure route
+And any Tailscale/overlay dependency is documented and checked
+And successful Google login/directory sync alone cannot pass this scenario.
+
+Scenario NETWORK-03: No usable internet route gives honest guidance
+Given H is in the directory but no usable direct/overlay/relay route exists
+When I try to connect from another network
+Then I see actionable secure connectivity guidance
+And I do not see a fake Connected state or automatic unsafe port forwarding
+And a blocked automatic-anywhere milestone remains explicitly incomplete.
+
+Scenario ACCESS-01: Keyboard and assistive use cover the core journey
+Given I use keyboard navigation or a screen reader
+When I operate login, sidebar, search, row actions, dialogs, switches, and toolbar
+Then controls have meaningful accessible names and visible focus
+And modals trap/restore focus, Escape cancels where appropriate, and Enter submits
+valid forms without triggering unrelated actions
+And status changes are announced without relying on color alone.
+
+Scenario ACCESS-02: Window sizes, zoom, and theme remain usable
+Given supported 720 x 560 and 1180 x 760 windows and high-DPI scaling
+When I visit all screens in Light and Dark
+Then essential buttons, errors, ID text, dropdowns, and session exit remain reachable
+And long computer names/emails cannot force controls outside the window
+And meaningful content does not depend on a fixed giant design-canvas width.
+
+Scenario FREE-01: Core functions have no artificial paid barriers
+Given I use account sign-in, authorized remote desktop, files, clipboard, and trust
+When those supported functions run
+Then no trial expiry, subscription prompt, or paid feature gate interrupts them
+And documentation truthfully separates free software from infrastructure costs.
+
+==========================================================================
+10. ERROR COPY AND UI BEHAVIOR
+==========================================================================
+
+Use simple messages plus a useful next action. Technical detail may be available
+under Advanced/Diagnostics; do not fill ordinary user flows with backend jargon.
+
+Examples of intended tone (adapt to the actual cause):
+- We couldn't sign you in. Try again.
+- We couldn't load your computers. [Retry]
+- This computer is offline.
+- Remote access is turned off on this computer.
+- Waiting for someone to accept on Office PC. [Cancel]
+- The connection request was declined. [Back to My Computers]
+- The request expired. [Try again]
+- You no longer have permission to connect to this computer.
+- Office PC is already in use.
+- Connection lost. Reconnecting... [Cancel]
+- We couldn't reach Office PC. [Try again] [Back to My Computers]
+- This session is view only.
+- File transfer wasn't allowed by the other computer.
+- We couldn't finish this file. [Retry] [Cancel]
+- The destination is full. Choose another folder or free some space.
+- This feature isn't available on this computer.
+
+Do not collapse every cause into Offline. Account service failure, disabled
+hosting, rejected approval, expired authorization, Busy, and no network route
+must have distinct handling.
+
+Notifications must not lie. Copied requires successful clipboard write; Saved
+requires successful persistence; Connected requires actual readiness; Done
+requires verified destination completion; Revoked requires host enforcement.
+
+Confirmation dialogs are for meaningful interruptions or access removal. Do not
+add an Are you sure? prompt to ordinary trusted one-click Connect.
+
+==========================================================================
+11. TESTING STRATEGY AND EVIDENCE
+==========================================================================
+
+BDD is about observable behavior, not requiring a particular test framework.
+Use the repository's existing Vitest/Testing Library and Rust tests. Add native
+and service integration tests where needed. Gherkin/Cucumber may be used if it
+helps execution, but do not add it merely to rephrase existing tests.
+
+Test tiers:
+1. Component/user-interaction tests: controls, forms, loading/errors, keyboard,
+   permission indicators, quality/theme state, progress formatting.
+2. Contract/state tests: operation IDs, cancellation, epochs, stale callbacks,
+   host-policy synchronization, timeout/reconnect transitions, account isolation.
+3. Native/service integration: auth, directory, device grants, host enforcement,
+   request races, transfer integrity/cancel/resume, secret redaction, migrations.
+4. Real two-machine tests: Windows Home host, true video/input, actual toolbar
+   reachability, display selection, audio/clipboard controls, host Stop, startup.
+5. Different-network tests: supported secure routing and truthful no-route errors.
+
+Preview fixtures:
+- Implement deterministic selectable states for empty/loaded/error directories,
+  online/offline/unknown devices, accepted/rejected/expired requests, connected/
+  reconnecting/failing sessions, and file success/interruption/denial.
+- Preview mode must be visibly labeled as simulated where it could be mistaken
+  for real connectivity. Package builds cannot silently fall back to mocks.
+- Mocks must preserve the real command contracts and reject unauthorized actions.
+- Use fixed test clocks and injected failures, not long real-time sleeps.
+- Screenshots validate appearance; they cannot validate remote desktop or auth.
+
+At the inspected repository snapshot, useful commands are:
+From apps/desktop:
+  npm ci
+  npm test
+  npm run build
+From apps/desktop/src-tauri:
+  cargo check --all-targets
+  cargo clippy --all-targets -- -D warnings
+  cargo test
+For native manual development from apps/desktop:
+  npm run tauri dev
+For packaging on a supported build environment:
+  npm run tauri build
+
+Re-check scripts/workflows on your actual branch. If adding a service, document
+its exact startup/test commands and run its relevant checks. Run focused tests
+during a slice and required regression checks before declaring it complete.
+If a dependency prevents a check, report BLOCKED and the environment cause;
+do not label an unrun test PASS. Do not claim you ran checks merely because CI
+configuration contains them.
+
+Real acceptance test matrix:
+- Fresh install host Windows Home + controller Windows: J1/J2.
+- Same account new controller: initial approval, later unattended one-click.
+- Different account: accepted/rejected/expired helper session; no persistent trust.
+- Same LAN and different networks using supported encrypted routes.
+- Offline/stale host, service stopped, slow network, cancellation, reconnect.
+- Host disables access and revokes trust while controller is active.
+- View-only; files denied; clipboard denied; audio denied; native bypass attempts.
+- Send/receive identical-name files, empty file, interruption/resume, content hash.
+- Restart, Stay signed in off/on, account switching, old-event rejection.
+- Native fullscreen toolbar, monitor switch, actual clipboard/audio/quality changes.
+- Light/Dark, smaller window, DPI, keyboard, long names, destination disk failure.
+
+Maintain traceability: Journey -> Scenario ID -> Implementation files -> Test
+or manual evidence -> Status. Prioritize permissions, false-success prevention,
+account isolation, and the primary one-click flow before visual polish.
+
+==========================================================================
+12. DEFINITION OF DONE
+==========================================================================
+
+The UI redesign is NOT complete just because all eight screens exist.
+
+Required completion evidence:
+- The screens match the supplied visual hierarchy and design tokens.
+- Every visible interactive control works through a real API or explicitly
+  advertises a genuinely unsupported capability; required gaps remain tracked.
+- Real Google sign-in and account-scoped directory sync work with documented
+  configuration. A demo login button cannot satisfy AUTH-02.
+- Real J1/J2 succeeds on supported Windows hardware including Windows Home.
+- Authorized saved PCs connect directly from My Computers with one action.
+- Incoming acceptance/rejection and all approved permissions are host-enforced.
+- Host disable and controller revocation block old native access paths.
+- Session lifecycle reflects real readiness, exit, loss, reconnect, and cancellation.
+- The required session toolbar is reachable and its advertised controls operate
+  the actual stream/capabilities; an interim external viewer is identified honestly.
+- Transfers move actual verified bytes, track IDs, handle errors, and cancel safely.
+- Account switching/sign-out cannot leak data or revive previous-account work.
+- Existing settings/local access migrate safely and advanced tools remain reachable.
+- Supported internet connectivity is tested across different networks. If automatic
+  no-extra-setup connectivity remains blocked, do not claim it is implemented.
+- Required automated checks pass and native/manual evidence is recorded.
+- Documentation states operator configuration and infrastructure needs without
+  inventing credentials, free hosting guarantees, or unsupported platform claims.
+
+A partial milestone can be delivered with clearly stated gaps. It is not the
+finished free TeamViewer alternative. Continue authorized work through the ordered
+slices rather than stopping after a visually convincing prototype.
+
+==========================================================================
+13. ORDERED IMPLEMENTATION PLAN: VERTICAL SLICES
+==========================================================================
+
+M0. REPOSITORY/DESIGN AUDIT AND CAPABILITY SPIKES
+Read real current code/design, establish checks, create progress/spec files.
+Verify account/directory gaps, stream lifecycle, toolbar integration, permission
+enforcement, encrypted channels, and internet routing. Document concrete adapter
+contracts and architectural blockers. Do not hide them in mock components.
+
+M1. SHARED APP SHELL AND VISUAL TOKENS
+Build sidebar, title bar strategy, accessible controls/dialogs, Light/Dark tokens,
+and responsive layout. Match Screens 01/02/08 without shipping the canvas runtime.
+Keep existing functions reachable and preview visibly simulated.
+Tests: ACCESS-01/02 and SETTINGS-02 plus basic navigation and loading failures.
+
+M2. REAL ACCOUNT SIGN-IN THROUGH TO AN EMPTY SAVED LIST
+Implement secure Google flow, credential storage, restore/sign-out/account switch,
+minimal service configuration, and account-isolated directory read.
+End-to-end slice: Login -> verified account -> real empty My Computers -> sign-out.
+Tests: AUTH-01..10, LIST-02/03, SECURITY-01/04.
+
+M3. DEVICE ENROLLMENT AND SYNCHRONIZED COMPUTER MANAGEMENT
+Stable identity/public ID, explicit enrollment, owner directory entries, real Add,
+rename/remove/tombstones, second-controller sync, presence, search, and recents
+model. Keep identity separate from addresses and address-book entries from trust.
+Tests: LIST-01..11, DEVICE-01..10, HOST-01/02, COMPAT-01.
+
+M4. HOST SETUP, TRUST, APPROVAL, AND PERMISSION ENFORCEMENT
+Enable/disable actual host, shared unattended policy, requester UI, request IDs/
+deadlines, initial device authorization, trust revocation, local Stop action.
+Enforce capabilities on all native paths before calling any session secure.
+Tests: HOST-03..08, APPROVAL-01..10, TRUST-01..03, SECURITY-02/05.
+
+M5. REAL ONE-CLICK DESKTOP AND LIFECYCLE
+Connect directly from the saved row, actual readiness, one attempt/session,
+cancellation/timeout/exit, bounded reconnect, Disconnect and real history.
+Demonstrate the full owner journey on two real Windows machines.
+Tests: SESSION-01..11, COMPAT-02, NETWORK-01.
+
+M6. SESSION TOOLBAR AND NATIVE CONTROL ADAPTERS
+Implement the real toolbar above/within the actual viewer, displays, quality,
+clipboard/audio policy and controls, and measured statistics. If the spike proved
+a necessary native viewer adapter/change, implement the smallest validated path.
+Tests: TOOLBAR-01..08 and real-hardware permission/control checks.
+
+M7. FILE TRANSFER FROM UI TO VERIFIED DESTINATION
+Standalone Screen 07 and toolbar entry; serial queue with transfer IDs; native
+file picker/drop; remote browse; byte-based progress; verification; per-item cancel;
+identity-checked resume; collision policy; folder transfer if claimed.
+Upgrade sensitive transport as needed, preserving safe path enforcement.
+Tests: FILE-01..11 and SECURITY-03.
+
+M8. PERSISTED SETTINGS AND MIGRATION FINISH
+Account persistence toggle, native startup, quality defaults versus session
+overrides, shared host policy, advanced settings/diagnostics/terminal/system tools.
+Keep terminal/power permissions explicit; do not expose them to a view-only helper.
+Tests: SETTINGS-01..04, TRUST regressions, migration and startup manual checks.
+
+M9. INTERNET ROUTING AND COMPLETE PRODUCT VERIFICATION
+Verify the supported secure cross-network route and implement missing automatic
+reachability work required for the intended no-extra-setup experience. Maintain
+truthful UX while work is in progress; do not silently drop the anywhere goal.
+Complete native session, permission, transfer, account-switch, resize, packaging,
+and regression matrix. Update documentation and scenario evidence.
+Tests: NETWORK-02/03, FREE-01, full required journey matrix.
+
+For EACH milestone:
+1. Read progress and relevant scenarios.
+2. State the exact behavior being implemented and changed contracts.
+3. Implement one coherent slice.
+4. Verify happy path, failure path, and relevant security boundary.
+5. Update progress with factual evidence and remaining blockers.
+6. Continue to the next slice while authorized; do not lose the product goal.
+
+If configuration/credentials/hardware are missing, finish independent implementation
+and automated checks. Provide exact missing setup and mark live verification
+BLOCKED. Never generate a fake successful provider/device response in production
+to make a milestone look complete.
+
+==========================================================================
+14. COMMON IMPLEMENTATION MISTAKES TO AVOID
+==========================================================================
+
+- Rebuilding the landing website instead of apps/desktop.
+- Treating support.js/DCLogic mockup scripts as the production application.
+- Implementing only attractive screens without native/account behavior.
+- Using example Mira/Daniel profiles, nine-digit IDs, latency, or file progress
+  as real data in the packaged app.
+- Treating auth.rs as a Google sign-in implementation.
+- Relabeling IP address or shared access code as public Device ID.
+- Inferring trust from same account, discovery, saved-list membership, or ID.
+- Marking Connected immediately after spawning Moonlight.
+- Showing a toolbar in React that is inaccessible behind the actual viewer.
+- Applying permission toggles only to button visibility.
+- Revoking local stored credentials while leaving host authorization valid.
+- Treating HMAC as encryption or logging secrets to debug account integration.
+- Automatically trusting a helper forever after one Accept.
+- Keeping separate unattended/Stay signed in states that contradict one another.
+- Completing history/transfer rows based on UI timers rather than verified results.
+- Resuming any same-size/name file without verifying content identity.
+- Sharing a single global transfer cancel flag across independent queue entries.
+- Letting late auth/session/transfer events mutate a different account or target.
+- Silently killing another stream by overwriting the active child-process handle.
+- Stating internet access works when only directory sync or LAN discovery works.
+- Advertising folder transfer, live quality, monitors, or clipboard/audio control
+  while those functions exist only in browser preview.
+- Guaranteeing pre-login/UAC/lock-screen control without capability testing.
+- Adding premium plans, enterprise dashboards, chat, AI assistants, teams/billing,
+  or unrelated features before the specified core journey is proven.
+- Removing advanced working features merely to copy the simple mockup.
+- Declaring PASS for tests not run, screenshots alone, or README aspirations.
+
+==========================================================================
+15. FINAL RESPONSE FORMAT FOR THE IMPLEMENTING AI
+==========================================================================
+
+When reporting a milestone, use this concise structure:
+
+Milestone: Mx
+Working user behavior: <what a user can now actually do>
+Changed files: <relevant paths>
+BDD verified: <IDs and actual evidence>
+Checks run: <commands and outcomes>
+Native verification: <machines/platform/routes actually used, or BLOCKED>
+Remaining blockers: <specific missing dependency and next action>
+Next task: <one concrete step>
+
+Your final completion report must separately identify:
+1. Real native/account functionality verified.
+2. Simulated preview coverage.
+3. Outstanding required behavior or hardware/configuration verification.
+4. Setup/run/build instructions and infrastructure configuration.
+
+Do not hide outstanding requirements behind the word done. Do not ask the owner
+to restate requirements already written here. Make sensible routine decisions,
+record them, and keep the primary flow simple: sign in -> saved PCs -> Connect.
+
+START NOW WITH M0. INSPECT THE CURRENT REPOSITORY AND THE ATTACHED DESIGN, CREATE
+THE DURABLE IMPLEMENTATION LOG, IDENTIFY REAL CAPABILITY GAPS, THEN IMPLEMENT THE
+FIRST COHERENT VERTICAL SLICE. KEEP WORKING THROUGH THE SPECIFICATION.
+
+==========================================================================
+SOURCE NOTES
+==========================================================================
+
+This prompt was prepared from direct inspection of the attached UI ZIP and a
+read-only checkout of NodeDesk at the commit identified in Section 02. No UI
+changes were applied to the user's repository while preparing this prompt, and
+no native remote-desktop or Google sign-in hardware test was performed.
+
+Repository snapshot source:
+https://github.com/berkkarabacak/nodedesk/tree/ff07bf2e171b9d3c247fe6c971c75c602f882abe
+App/API source:
+https://github.com/berkkarabacak/nodedesk/blob/ff07bf2e171b9d3c247fe6c971c75c602f882abe/apps/desktop/src/lib/api.ts
+Native stream source:
+https://github.com/berkkarabacak/nodedesk/blob/ff07bf2e171b9d3c247fe6c971c75c602f882abe/apps/desktop/src-tauri/src/moonlight.rs
+Native command source:
+https://github.com/berkkarabacak/nodedesk/blob/ff07bf2e171b9d3c247fe6c971c75c602f882abe/apps/desktop/src-tauri/src/main.rs
+Design source: Simple Remote Desktop App UI.zip, supplied by the product owner.
+
+Behavioral policies, milestone order, test constants, and scenario expectations
+are implementation requirements/proposed gap-filling decisions, not assertions
+that all these features already exist in the inspected repository.

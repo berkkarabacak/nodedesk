@@ -17,14 +17,30 @@ use crate::{agent, auth, client, discovery, files, state, sunshine, terminal};
 use axum::{extract::State, response::IntoResponse, routing::post, Json, Router};
 use std::sync::mpsc;
 
-/// Starts a simulated machine: a NodeDesk agent on an ephemeral port.
+/// Starts a simulated machine: a NodeDesk agent on an ephemeral port over
+/// TLS, exercising the same encrypted channel as production (SECURITY-03).
 /// Returns its port.
 async fn spawn_machine(code: &str) -> u16 {
-    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    crate::tls::ensure_crypto_provider();
+    let identity = crate::tls::ephemeral().unwrap();
+    // Bind first so the OS-assigned port is known before serving.
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
     let port = listener.local_addr().unwrap().port();
-    let ctx = std::sync::Arc::new(agent::AgentCtx::new(code.to_string()));
+    let tls_config = axum_server::tls_rustls::RustlsConfig::from_pem(
+        identity.cert_pem.as_bytes().to_vec(),
+        identity.key_pem.as_bytes().to_vec(),
+    )
+    .await
+    .unwrap();
+    let ctx = std::sync::Arc::new(agent::AgentCtx::with_identity(
+        code.to_string(),
+        Some(identity.cert_pem.clone()),
+        None,
+    ));
     tokio::spawn(async move {
-        let _ = axum::serve(listener, agent::router(ctx)).await;
+        let _ = axum_server::from_tcp_rustls(listener, tls_config)
+            .serve(agent::router(ctx).into_make_service_with_connect_info::<std::net::SocketAddr>())
+            .await;
     });
     port
 }
@@ -103,10 +119,13 @@ async fn two_machine_end_to_end() {
     );
     assert!(!signature.contains("SIMB-CODE"));
     // ...and that capture cannot be replayed.
+    let replay_client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true) // raw replay probe; signature is what matters
+        .build()
+        .unwrap();
     let replay = |sig: String, nonce: String, ts: i64| {
-        machine_a
-            .http
-            .get(format!("http://127.0.0.1:{machine_b_port}/metrics"))
+        replay_client
+            .get(format!("https://127.0.0.1:{machine_b_port}/metrics"))
             .header(auth::TS_HEADER, ts.to_string())
             .header(auth::NONCE_HEADER, nonce)
             .header(auth::AUTH_HEADER, sig)

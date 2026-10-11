@@ -1,0 +1,37 @@
+/* NodeDesk design tokens — single source of truth for Light and Dark.
+ * Values come from the supplied design system (SPEC §04).
+ * Every app-owned surface must consume these tokens, not hard-coded colors. */
+
+:root {
+  --nd-bg: #f3f2f2;
+  --nd-surface: #eae9e9;
+  --nd-text: #201e1d;
+  --nd-text-dim: color-mix(in srgb, var(--nd-text) 62%, transparent);
+  --nd-divider: color-mix(in srgb, var(--nd-text) 22%, transparent);
+  --nd-row-rule: color-mix(in srgb, var(--nd-text) 10%, transparent);
+  --nd-accent: #ec3013;
+  --nd-accent-strong: #c22408; /* darker ramp for paragraph-sized text */
+  --nd-on-accent: #ffffff;
+  --nd-danger: #c22408;
+  --nd-ok: #1a7f37;
+  --nd-focus: #ec3013;
+  --nd-shadow: 0 10px 30px rgb(0 0 0 / 0.12);
+  color-scheme: light;
+}
+
+[data-theme='dark'] {
+  --nd-bg: #201e1d;
+  --nd-surface: #2d2b2b;
+  --nd-text: #f3f2f2;
+  --nd-text-dim: color-mix(in srgb, var(--nd-text) 62%, transparent);
+  --nd-divider: color-mix(in srgb, var(--nd-text) 26%, transparent);
+  --nd-row-rule: color-mix(in srgb, var(--nd-text) 12%, transparent);
+  --nd-accent: #ff563c;
+  --nd-accent-strong: #ff745f;
+  --nd-on-accent: #201e1d;
+  --nd-danger: #ff745f;
+  --nd-ok: #4cc38a;
+  --nd-focus: #ff563c;
+  --nd-shadow: 0 10px 30px rgb(0 0 0 / 0.5);
+  color-scheme: dark;
+}

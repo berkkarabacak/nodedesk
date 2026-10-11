@@ -1,0 +1,15 @@
+# NodeDesk Demo Kit — 3 double-clicks to a running demo
+#
+# STEP 1 (once): paste your Google OAuth Desktop-app client ID below.
+#   Get it in 5 minutes: Google Cloud Console -> APIs & Services -> Credentials
+#   -> Create Credentials -> OAuth client ID -> Application type: Desktop app.
+#   (Details: docs/ui-redesign/GOOGLE_SETUP.md)
+GOOGLE_CLIENT_ID=PASTE_YOUR_CLIENT_ID_HERE.apps.googleusercontent.com
+#
+# STEP 2: the directory service address the desktop apps will use.
+#   Same machine as the service: http://127.0.0.1:8787
+#   Service on another LAN box:  http://THAT-BOX-LAN-IP:8787
+DIRECTORY_URL=http://127.0.0.1:8787
+#
+# STEP 3: double-click start-directory.cmd on the service machine,
+#         then install NodeDesk-Setup-x64.exe on both demo machines.

@@ -18,7 +18,7 @@ import {
   UploadCloud,
   X,
 } from 'lucide-react'
-import { api, onEvent, type Computer, type FileEntry, type TransferProgress } from '../lib/api'
+import { api, onEvent, type Computer, type FileEntry, type TransferItem } from '../lib/api'
 
 const isTauri = '__TAURI_INTERNALS__' in window
 
@@ -38,7 +38,7 @@ function FilesTab({ computer, notify }: { computer: Computer; notify: (m: string
   const [path, setPath] = useState('')
   const [entries, setEntries] = useState<FileEntry[]>([])
   const [loading, setLoading] = useState(false)
-  const [transfer, setTransfer] = useState<TransferProgress | null>(null)
+  const [transfer, setTransfer] = useState<TransferItem | null>(null)
   const [dragOver, setDragOver] = useState(false)
 
   const load = useCallback(
@@ -60,9 +60,9 @@ function FilesTab({ computer, notify }: { computer: Computer; notify: (m: string
 
   useEffect(() => {
     let unlisten: (() => void) | undefined
-    void onEvent('transfer-progress', (p: TransferProgress) => {
+    void onEvent('transfer-progress', (p: TransferItem) => {
       setTransfer(p)
-      if (p.finished) setTimeout(() => setTransfer(null), 3000)
+      if (p.state === 'completed') setTimeout(() => setTransfer(null), 3000)
     }).then((fn) => (unlisten = fn))
     return () => unlisten?.()
   }, [])
@@ -164,7 +164,7 @@ function FilesTab({ computer, notify }: { computer: Computer; notify: (m: string
             <span className="text-zinc-300">
               {transfer.direction === 'up' ? 'Sending' : 'Receiving'} {transfer.file}
             </span>
-            <button onClick={() => void api.cancelTransfer()} className="text-zinc-500 hover:text-red-400">
+            <button onClick={() => transfer && void api.cancelTransfer(transfer.transferId)} className="text-zinc-500 hover:text-red-400">
               <X className="h-3.5 w-3.5" />
             </button>
           </div>
@@ -176,7 +176,7 @@ function FilesTab({ computer, notify }: { computer: Computer; notify: (m: string
           </div>
           <p className="mt-1 text-[11px] text-zinc-500">
             {fmtSize(transfer.doneBytes)} / {fmtSize(transfer.totalBytes)}
-            {transfer.finished && ' — done'}
+            {transfer.state === 'completed' && ' — done'}
           </p>
         </div>
       )}
