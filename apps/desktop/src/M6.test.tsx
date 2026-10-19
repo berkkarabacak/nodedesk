@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import RemoteSession from './screens/RemoteSession'
 import { useConnection, type ConnectionTarget } from './lib/useConnection'
-import { api, __resetMockBackend, type ConnectionRequest } from './lib/api'
+import { api, __emitMockEvent, __resetMockBackend, type ConnectionRequest } from './lib/api'
 
 // M6: session toolbar behavior. Native/hardware verification stays BLOCKED;
 // these cover the contract: no invented displays, honest stats, controlled
@@ -81,9 +81,13 @@ describe('Session toolbar', () => {
 
   it('changeQuality relaunches with the override and updates only after success', async () => {
     vi.spyOn(api, 'createConnectionRequest').mockResolvedValue(acceptedRequest())
-    vi.spyOn(api, 'connect').mockResolvedValue()
+    vi.spyOn(api, 'connect').mockImplementation(async () => {
+      __emitMockEvent('stream-ready', {})
+    })
     const disconnect = vi.spyOn(api, 'disconnect').mockResolvedValue()
-    const withQuality = vi.spyOn(api, 'connectWithQuality').mockResolvedValue()
+    const withQuality = vi.spyOn(api, 'connectWithQuality').mockImplementation(async () => {
+      __emitMockEvent('stream-ready', {})
+    })
     const { result } = renderHook(() => useConnection({ approvalPollMs: 30 }))
 
     await act(() => result.current.start(TARGET))
@@ -97,7 +101,9 @@ describe('Session toolbar', () => {
 
   it('changeQuality failure keeps the previous indicator (no label-only switch)', async () => {
     vi.spyOn(api, 'createConnectionRequest').mockResolvedValue(acceptedRequest())
-    vi.spyOn(api, 'connect').mockResolvedValue()
+    vi.spyOn(api, 'connect').mockImplementation(async () => {
+      __emitMockEvent('stream-ready', {})
+    })
     vi.spyOn(api, 'disconnect').mockResolvedValue()
     vi.spyOn(api, 'connectWithQuality').mockRejectedValue(new Error('host busy'))
     const { result } = renderHook(() => useConnection({ approvalPollMs: 30 }))

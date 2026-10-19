@@ -24,7 +24,8 @@ pub struct Permissions {
 }
 
 struct Grant {
-    requester_device_id: String,
+    request_id: String,
+    controller_device_id: String,
     permissions: Permissions,
     expires: Instant,
 }
@@ -52,7 +53,8 @@ impl GrantStore {
             tokens.insert(
                 token.to_string(),
                 Grant {
-                    requester_device_id: requester_device_id.to_string(),
+                    request_id: token.to_string(),
+                    controller_device_id: requester_device_id.to_string(),
                     permissions,
                     expires: Instant::now() + GRANT_TTL,
                 },
@@ -70,7 +72,7 @@ impl GrantStore {
     /// Revoke every grant belonging to one controller device (TRUST-02).
     pub fn revoke_device(&self, requester_device_id: &str) {
         if let Ok(mut tokens) = self.tokens.lock() {
-            tokens.retain(|_, g| g.requester_device_id != requester_device_id);
+            tokens.retain(|_, g| g.controller_device_id != requester_device_id);
         }
     }
 
@@ -82,18 +84,65 @@ impl GrantStore {
     }
 
     /// The permissions of a presented token, if valid and unexpired.
+    /// Does not check controller identity — callers that enforce a session
+    /// must use [`Self::authorize`].
+    #[cfg(test)]
     pub fn permissions(&self, token: &str) -> Option<Permissions> {
         let mut tokens = self.tokens.lock().ok()?;
         let grant = tokens.get(token)?;
-        if grant.expires < Instant::now() {
+        if grant.expires <= Instant::now() {
             tokens.remove(token);
             return None;
         }
         Some(grant.permissions)
     }
+
+    /// Permissions for this token only when the presenter is the controller
+    /// the host accepted (APPROVAL-07). A forged token, a wrong device id,
+    /// or an expired grant authorizes nothing.
+    pub fn authorize(&self, token: &str, controller_device_id: &str) -> Option<Permissions> {
+        let mut tokens = self.tokens.lock().ok()?;
+        let grant = tokens.get(token)?;
+        if grant.expires <= Instant::now() {
+            tokens.remove(token);
+            return None;
+        }
+        if grant.request_id != token || grant.controller_device_id != controller_device_id {
+            return None;
+        }
+        Some(grant.permissions)
+    }
+
+    /// True when at least one unexpired account grant is outstanding.
+    /// Sensitive agent endpoints refuse the access-code-only bypass while
+    /// this is true.
+    pub fn has_active(&self) -> bool {
+        let Ok(mut tokens) = self.tokens.lock() else {
+            return false;
+        };
+        let now = Instant::now();
+        tokens.retain(|_, grant| grant.expires > now);
+        !tokens.is_empty()
+    }
+
+    #[cfg(test)]
+    pub fn expire_now(&self, token: &str) {
+        if let Ok(mut tokens) = self.tokens.lock() {
+            if let Some(grant) = tokens.get_mut(token) {
+                grant.expires = Instant::now() - Duration::from_secs(1);
+            }
+        }
+    }
+
+    #[cfg(test)]
+    pub fn request_id_of(&self, token: &str) -> Option<String> {
+        self.tokens.lock().ok()?.get(token).map(|g| g.request_id.clone())
+    }
 }
 
 pub static GRANT_HEADER: &str = "x-nodedesk-grant";
+/// Controller device id that must match the grant (APPROVAL-07).
+pub static CONTROLLER_HEADER: &str = "x-nodedesk-controller";
 
 #[cfg(test)]
 mod tests {
@@ -130,5 +179,29 @@ mod tests {
         assert!(store.permissions("t2").is_some());
         store.revoke_all();
         assert!(store.permissions("t2").is_none());
+    }
+
+    #[test]
+    fn authorize_requires_the_accepted_controller_and_expiry() {
+        let store = GrantStore::new();
+        store.issue(
+            "req-1",
+            "dev-c1",
+            Permissions {
+                control: false,
+                files: true,
+                clipboard: false,
+                audio: false,
+            },
+        );
+        assert_eq!(store.request_id_of("req-1").as_deref(), Some("req-1"));
+        let perms = store.authorize("req-1", "dev-c1").expect("matching controller");
+        assert!(perms.files && !perms.control);
+        // A different device cannot reuse C1's request id (APPROVAL-07).
+        assert!(store.authorize("req-1", "dev-c2").is_none());
+        assert!(store.authorize("forged", "dev-c1").is_none());
+        store.expire_now("req-1");
+        assert!(store.authorize("req-1", "dev-c1").is_none());
+        assert!(!store.has_active());
     }
 }

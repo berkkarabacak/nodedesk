@@ -143,6 +143,28 @@ pub fn download_dir() -> Option<PathBuf> {
     Some(base.join("NodeDesk"))
 }
 
+/// Folder to reveal for a completed download. `requested` is the destination
+/// file or its folder. Anything outside `root` is refused (FILE-02).
+pub fn reveal_target(root: &std::path::Path, requested: Option<&str>) -> Result<PathBuf, String> {
+    let root_real = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let candidate = match requested.map(str::trim).filter(|p| !p.is_empty()) {
+        Some(path) => {
+            let path = PathBuf::from(path);
+            if path.is_dir() {
+                path
+            } else {
+                path.parent().map(|dir| dir.to_path_buf()).unwrap_or(path)
+            }
+        }
+        None => root_real.clone(),
+    };
+    let candidate_real = candidate.canonicalize().unwrap_or(candidate);
+    if candidate_real != root_real && !candidate_real.starts_with(&root_real) {
+        return Err("That folder is outside downloads.".into());
+    }
+    Ok(candidate_real)
+}
+
 // ---------------------------------------------------------------------------
 // Client-side transfers (called via Tauri commands)
 // ---------------------------------------------------------------------------
@@ -169,6 +191,9 @@ pub struct TransferContext {
     pub code: String,
     /// Session grant token for the active session, if any (APPROVAL-06).
     pub grant: Option<String>,
+    /// This controller's device id, sent with the grant so the host can
+    /// reject a stolen request id (APPROVAL-07).
+    pub controller: Option<String>,
 }
 
 /// Upload one file as a queued transfer. Resume continues only when this is
@@ -200,6 +225,7 @@ pub async fn send_transfer(
     let mut offset: u64 = match client::AgentRequest::get(&t.address, port, "/files/stat")
         .query(vec![("path", remote_path.clone())])
         .grant(ctx.grant.clone())
+        .controller(ctx.controller.clone())
         .timeout(Duration::from_millis(3000))
         .send(&ctx.http, code)
         .await
@@ -235,6 +261,7 @@ pub async fn send_transfer(
         if let Err(e) = client::AgentRequest::post(&t.address, port, "/files/upload")
             .query(vec![("path", remote_path.clone()), ("offset", offset.to_string())])
             .grant(ctx.grant.clone())
+        .controller(ctx.controller.clone())
             .body(buf[..read].to_vec())
             .send_ok(&ctx.http, code)
             .await
@@ -254,6 +281,7 @@ pub async fn send_transfer(
     let final_size: u64 = match client::AgentRequest::get(&t.address, port, "/files/stat")
         .query(vec![("path", remote_path)])
         .grant(ctx.grant.clone())
+        .controller(ctx.controller.clone())
         .timeout(Duration::from_millis(3000))
         .send(&ctx.http, code)
         .await
@@ -289,6 +317,7 @@ pub async fn download_transfer(
     let total: u64 = client::AgentRequest::get(&t.address, port, "/files/stat")
         .query(vec![("path", t.source.clone())])
         .grant(ctx.grant.clone())
+        .controller(ctx.controller.clone())
         .timeout(Duration::from_millis(3000))
         .send_ok(&ctx.http, code)
         .await?
@@ -320,6 +349,7 @@ pub async fn download_transfer(
         let bytes = match client::AgentRequest::get(&t.address, port, "/files/download")
             .query(vec![("path", t.source.clone()), ("offset", offset.to_string())])
             .grant(ctx.grant.clone())
+        .controller(ctx.controller.clone())
             .send_ok(&ctx.http, code)
             .await
         {
@@ -589,5 +619,18 @@ mod tests {
         assert_eq!(entries[0].name, "zdir");
         std::env::remove_var("NODEDESK_INCOMING_DIR");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn reveal_target_stays_inside_downloads() {
+        let root = std::env::temp_dir().join("nodedesk-reveal-root");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("NodeDesk")).unwrap();
+        let file = root.join("NodeDesk").join("notes.txt");
+        std::fs::write(&file, b"hi").unwrap();
+        let opened = reveal_target(&root.join("NodeDesk"), Some(file.to_str().unwrap())).unwrap();
+        assert_eq!(opened, root.join("NodeDesk").canonicalize().unwrap());
+        assert!(reveal_target(&root.join("NodeDesk"), Some("/etc")).is_err());
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

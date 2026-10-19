@@ -155,6 +155,7 @@ export interface TransferItem {
   direction: 'up' | 'down'
   file: string
   address: string
+  dest?: string
   doneBytes: number
   totalBytes: number
   state: TransferState
@@ -187,8 +188,17 @@ type NodeDeskEvent =
   | 'bootstrap-error'
   | 'bootstrap-done'
   | 'stream-started'
+  | 'stream-ready'
   | 'stream-exited'
+  | 'stream-reconnecting'
+  | 'stream-reconnect-failed'
+  | 'stream-revoked'
   | 'transfer-progress'
+
+/** Test and preview helper. No-op inside the packaged shell. */
+export function __emitMockEvent(event: NodeDeskEvent, payload: unknown) {
+  if (!isTauri) mockEmit(event, payload)
+}
 
 export async function onEvent(event: NodeDeskEvent, cb: Listener): Promise<() => void> {
   if (isTauri) {
@@ -366,9 +376,9 @@ async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Promi
       mockOnboarded = true
       localStorage.setItem('nodedesk.onboarded', 'yes')
       if (mockSettings.mode !== 'controller') {
-        mockEmit('bootstrap-progress', 'Installing Sunshine host…')
-        setTimeout(() => mockEmit('bootstrap-progress', 'Sunshine ready (v27.0)'), 900)
-        setTimeout(() => mockEmit('bootstrap-progress', 'Securing host…'), 1600)
+        mockEmit('bootstrap-progress', 'Preparing this computer…')
+        setTimeout(() => mockEmit('bootstrap-progress', 'Host service is ready.'), 900)
+        setTimeout(() => mockEmit('bootstrap-progress', 'Securing this computer…'), 1600)
         setTimeout(() => mockEmit('bootstrap-done', 'true'), 2300)
       } else {
         setTimeout(() => mockEmit('bootstrap-done', 'true'), 400)
@@ -395,19 +405,28 @@ async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Promi
     case 'approve_pairing':
       return undefined as T
     case 'connect_computer':
-      setTimeout(() => mockEmit('stream-started', String(args?.address ?? '')), 300)
+      // Spawn is not readiness. The preview emits both so the shell can show
+      // Connecting, then Connected only after the ready signal (SESSION-02).
+      setTimeout(() => mockEmit('stream-started', String(args?.address ?? '')), 40)
+      setTimeout(() => mockEmit('stream-ready', String(args?.address ?? '')), 80)
       return undefined as T
     case 'disconnect_computer':
       mockEmit('stream-exited', true)
+      return undefined as T
+    case 'session_grant_register':
+    case 'session_grant_clear':
+    case 'session_mark_revoked':
+      return undefined as T
+    case 'reveal_download_folder':
       return undefined as T
     case 'power_action':
     case 'wake_computer':
       return undefined as T
     case 'run_diagnostics':
       return [
-        { label: 'Host service', ok: true, detail: 'Sunshine host is running' },
-        { label: 'Host API', ok: true, detail: 'Local Sunshine API responding' },
-        { label: 'Controller', ok: true, detail: 'Moonlight client ready' },
+        { label: 'Host service', ok: true, detail: 'Host service is running' },
+        { label: 'Host API', ok: true, detail: 'Local host API is responding' },
+        { label: 'Controller', ok: true, detail: 'Viewer is ready' },
         { label: 'GPU', ok: true, detail: 'NVIDIA RTX 3090 detected' },
         { label: 'Network', ok: true, detail: 'LAN address 192.168.1.10' },
         { label: 'Tailscale', ok: true, detail: 'Installed' },
@@ -415,7 +434,10 @@ async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Promi
     case 'export_diagnostics':
       return 'C:\\Users\\demo\\nodedesk-diagnostics.txt' as T
     case 'get_settings':
-      return { ...mockSettings, onboarded: true } as T
+      return {
+        ...mockSettings,
+        onboarded: mockOnboarded || localStorage.getItem('nodedesk.onboarded') === 'yes',
+      } as T
     case 'save_settings':
       if (!stale()) mockSettings = { ...mockSettings, ...(args?.settings as Partial<Settings>) }
       return undefined as T
@@ -471,9 +493,11 @@ async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Promi
     case 'download_file': {
       const id = 'mock-t-' + ++mockTransferSeq
       const file = String(args?.path ?? '').split(/[\\/]/).pop() ?? 'file'
+      const knownSize: Record<string, number> = { 'notes.txt': 1842, 'render-final.mp4': 734003200 }
       const item: TransferItem = {
         transferId: id, direction: 'down', file, address: String(args?.address ?? ''),
-        doneBytes: 0, totalBytes: 734003200, state: 'queued',
+        doneBytes: 0, totalBytes: knownSize[file] ?? 1842, state: 'queued',
+        dest: 'NodeDesk/' + file,
       }
       mockTransfers.set(id, item)
       let step = 0
@@ -852,6 +876,12 @@ export const api = {
   setSessionClipboard: (enabled: boolean) => invoke<void>('session_clipboard', { enabled }),
   sendClipboard: (text: string) => invoke<void>('session_clipboard_send', { text }),
   receiveClipboard: () => invoke<string>('session_clipboard_receive'),
+  registerSessionGrant: (address: string, requestId: string) =>
+    invoke<void>('session_grant_register', { address, requestId }),
+  clearSessionGrant: (address: string) => invoke<void>('session_grant_clear', { address }),
+  markSessionRevoked: () => invoke<void>('session_mark_revoked'),
+  /** Open the real folder a completed download landed in (FILE-02). */
+  revealDownloadFolder: (path?: string) => invoke<void>('reveal_download_folder', { path }),
   // --- M4: approval + trust ---
   getHostPolicy: () => invoke<{ unattended: boolean }>('host_get_policy'),
   setHostPolicy: (unattended: boolean) => invoke<void>('host_set_policy', { unattended }),

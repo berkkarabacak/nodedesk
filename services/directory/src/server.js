@@ -12,8 +12,41 @@
 
 import { createServer } from 'node:http'
 import { createHash, randomBytes } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 import { openDb } from './db.js'
 import { createGoogleVerifier } from './google.js'
+
+/** Host loopback. nginx on the same machine is the only public listener. */
+export const DEFAULT_BIND = '127.0.0.1'
+/** Matches the hosted layout: nginx :443 -> 127.0.0.1:8081. */
+export const DEFAULT_PORT = 8081
+
+/**
+ * A usable Google OAuth client id. Placeholders and anything that is not a
+ * Google client id are rejected so a sample file cannot pretend to be configured.
+ * Client secrets are never read.
+ */
+export function isUsableClientId(id) {
+  const value = String(id ?? '').trim()
+  if (!value || value.includes('YOUR_') || value.toLowerCase().includes('placeholder')) return false
+  return value.endsWith('.apps.googleusercontent.com')
+}
+
+/** Env var, or a mode-600 file such as /etc/nodedesk/google-client-id. */
+export function loadClientId(env = process.env, readFile = readFileSync) {
+  const fromEnv = String(env.GOOGLE_CLIENT_ID ?? '').trim()
+  let fromFile = ''
+  const file = String(env.GOOGLE_CLIENT_ID_FILE ?? '').trim()
+  if (file) {
+    try {
+      fromFile = String(readFile(file, 'utf8')).trim()
+    } catch {
+      fromFile = ''
+    }
+  }
+  const id = fromEnv || fromFile
+  return isUsableClientId(id) ? id : ''
+}
 
 const SESSION_TTL_MS = 60 * 60 * 1000 // 1 hour
 const REFRESH_TTL_MS = 30 * 24 * 60 * 60 * 1000 // 30 days
@@ -577,6 +610,9 @@ export function createDirectoryService({ dbPath = ':memory:', verifyIdToken, cli
   const server = createServer(async (req, res) => {
     try {
       const url = new URL(req.url, 'http://localhost')
+      if (req.method === 'GET' && url.pathname === '/healthz') {
+        return json(res, 200, { ok: true })
+      }
       const key = `${req.method} ${url.pathname}`
       const handler = routes[key]
       if (!handler) return json(res, 404, { error: 'not_found' })
@@ -627,15 +663,17 @@ export function createDirectoryService({ dbPath = ':memory:', verifyIdToken, cli
 import { pathToFileURL } from 'node:url'
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const clientId = process.env.GOOGLE_CLIENT_ID
+  const clientId = loadClientId()
   if (!clientId) {
-    console.error('GOOGLE_CLIENT_ID is required. See docs/ui-redesign/GOOGLE_SETUP.md.')
+    console.error('GOOGLE_CLIENT_ID is required (env or GOOGLE_CLIENT_ID_FILE). See docs/ui-redesign/GOOGLE_SETUP.md.')
     process.exit(1)
   }
-  const port = Number(process.env.PORT ?? 8787)
+  const port = Number(process.env.PORT ?? DEFAULT_PORT)
+  const bind = process.env.BIND || DEFAULT_BIND
   const dbPath = process.env.DB_PATH ?? 'directory.db'
   const svc = createDirectoryService({ dbPath, clientId })
-  svc.server.listen(port, () => {
-    console.log(`NodeDesk directory service listening on :${port} (db: ${dbPath})`)
+  // Bind the host loopback unless BIND says otherwise. Do not listen on 0.0.0.0.
+  svc.server.listen(port, bind, () => {
+    console.log(`NodeDesk directory service listening on ${bind}:${port} (db: ${dbPath})`)
   })
 }

@@ -28,6 +28,8 @@ export default function ThisComputer({
   const [setupMsg, setSetupMsg] = useState('')
   const [enrolling, setEnrolling] = useState(false)
   const [enrollError, setEnrollError] = useState<string | null>(null)
+  const [pairPin, setPairPin] = useState('')
+  const [pairMsg, setPairMsg] = useState<{ text: string; isError: boolean } | null>(null)
 
   const hostingReady = Boolean(info?.sunshineInstalled && info.sunshineRunning)
 
@@ -206,6 +208,47 @@ export default function ThisComputer({
           {enrollError && (
             <div className="mt-3">
               <Notice tone="error">{enrollError}</Notice>
+            </div>
+          )}
+        </div>
+      )}
+
+      {isHost && (
+        <div className="mt-6 border-2 border-nd-divider bg-nd-surface p-5">
+          <p className="text-sm font-semibold">Approve a pairing</p>
+          <p className="mt-1 text-xs text-nd-dim">
+            When another computer shows a 4-digit code, enter it here. This is the local-network pairing step.
+          </p>
+          <form
+            className="mt-3 flex items-center gap-2"
+            onSubmit={(e) => {
+              e.preventDefault()
+              setPairMsg(null)
+              void api
+                .approvePairing(pairPin)
+                .then(() => {
+                  setPairPin('')
+                  setPairMsg({ text: 'Pairing approved.', isError: false })
+                })
+                .catch((err) => setPairMsg({ text: err instanceof Error ? err.message : 'That code was not accepted.', isError: true }))
+            }}
+          >
+            <input
+              value={pairPin}
+              onChange={(e) => setPairPin(e.target.value)}
+              inputMode="numeric"
+              autoComplete="off"
+              aria-label="Pairing code"
+              placeholder="4-digit code"
+              className="w-36 border-2 border-nd-divider bg-nd-bg px-3 py-2 font-mono text-sm tracking-widest outline-none"
+            />
+            <Button type="submit" variant="secondary" disabled={pairPin.replace(/\D/g, '').length !== 4}>
+              Approve
+            </Button>
+          </form>
+          {pairMsg && (
+            <div className="mt-3">
+              <Notice tone={pairMsg.isError ? 'error' : 'ok'}>{pairMsg.text}</Notice>
             </div>
           )}
         </div>

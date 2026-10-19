@@ -59,14 +59,65 @@ pub struct AccountState {
     session: Mutex<Option<Session>>,
 }
 
+fn usable_client_id(id: &str) -> bool {
+    let id = id.trim();
+    !id.is_empty()
+        && !id.contains("YOUR_")
+        && !id.to_ascii_lowercase().contains("placeholder")
+        && id.ends_with(".apps.googleusercontent.com")
+}
+
+fn usable_directory_url(url: &str) -> bool {
+    let url = url.trim();
+    !url.is_empty()
+        && !url.contains("example.com")
+        && (url.starts_with("https://") || url.starts_with("http://"))
+}
+
+/// Client id and directory URL. Environment variables win over `account.json`.
+/// The sample placeholder is treated as not configured — it is not a client.
+pub fn load_account_config(config_dir: &Path) -> Option<AccountConfig> {
+    let from_env = match (
+        std::env::var("NODEDESK_GOOGLE_CLIENT_ID").ok(),
+        std::env::var("NODEDESK_DIRECTORY_URL").ok(),
+    ) {
+        (Some(client_id), Some(directory_url)) => Some(AccountConfig {
+            client_id: client_id.trim().to_string(),
+            directory_url: directory_url.trim().trim_end_matches('/').to_string(),
+        }),
+        _ => None,
+    };
+    let from_file = std::fs::read_to_string(config_dir.join("account.json"))
+        .ok()
+        .and_then(|text| serde_json::from_str::<AccountConfig>(&text).ok());
+    let config = from_env.or(from_file)?;
+    if usable_client_id(&config.client_id) && usable_directory_url(&config.directory_url) {
+        Some(AccountConfig {
+            client_id: config.client_id.trim().to_string(),
+            directory_url: config.directory_url.trim().trim_end_matches('/').to_string(),
+        })
+    } else {
+        None
+    }
+}
+
+/// This computer's stable device id, if `device.json` already exists.
+/// Does not create one — a missing identity must not be invented mid-request.
+pub fn local_device_id(config_dir: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(config_dir.join("device.json")).ok()?;
+    let parsed: serde_json::Value = serde_json::from_str(&text).ok()?;
+    let id = parsed.get("deviceId").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+    if id.is_empty() {
+        None
+    } else {
+        Some(id)
+    }
+}
+
 impl AccountState {
     pub fn new(config_dir: &Path) -> Self {
-        let config = std::fs::read_to_string(config_dir.join("account.json"))
-            .ok()
-            .and_then(|text| serde_json::from_str::<AccountConfig>(&text).ok())
-            .filter(|c| !c.client_id.is_empty() && !c.directory_url.is_empty());
         Self {
-            config,
+            config: load_account_config(config_dir),
             session: Mutex::new(None),
         }
     }
@@ -548,6 +599,7 @@ pub async fn auth_sign_out(acc: State<'_, AccountState>, app: State<'_, AppState
     let _ = state::delete_secret(REFRESH_KEY);
     // AUTH-10: account-authorized incoming work ends with sign-out.
     app.grants.revoke_all();
+    close_paired_client_bypass(&app).await;
     Ok(())
 }
 
@@ -906,16 +958,37 @@ pub async fn host_accept_request(
         .unwrap_or("")
         .to_string();
     let perms = res.get("permissions").cloned().unwrap_or(serde_json::json!({}));
+    let control = perms.get("control").and_then(|v| v.as_bool()).unwrap_or(false);
     app.grants.issue(
         &id,
         &requester,
         crate::grants::Permissions {
-            control: perms.get("control").and_then(|v| v.as_bool()).unwrap_or(false),
+            control,
             files: perms.get("files").and_then(|v| v.as_bool()).unwrap_or(false),
             clipboard: perms.get("clipboard").and_then(|v| v.as_bool()).unwrap_or(false),
             audio: perms.get("audio").and_then(|v| v.as_bool()).unwrap_or(false),
         },
     );
+    // APPROVAL-05: view-only has to be true on the host, not only in the dialog.
+    // Sunshine reads mouse/keyboard/controller at startup, so this rewrites the
+    // full config (never a partial file) and restarts the host service. If that
+    // cannot be done, the grant is withdrawn.
+    if !control {
+        if let Err(e) = crate::sunshine::set_remote_input(&app.http_local, &app.config_dir, false).await {
+            app.grants.revoke(&id);
+            let _ = authed_call(
+                &acc,
+                &app,
+                "POST",
+                "/v1/requests/end",
+                Some(serde_json::json!({ "id": id })),
+            )
+            .await;
+            return Err(format!(
+                "View-only could not be enforced on this computer, so the session was not opened. {e}"
+            ));
+        }
+    }
     Ok(res)
 }
 
@@ -956,8 +1029,10 @@ pub async fn request_cancel(acc: State<'_, AccountState>, app: State<'_, AppStat
 #[tauri::command]
 pub async fn request_end(acc: State<'_, AccountState>, app: State<'_, AppState>, id: String) -> Result<(), String> {
     let _ = authed_call(&acc, &app, "POST", "/v1/requests/end", Some(serde_json::json!({ "id": id }))).await?;
-    // SESSION-09/10: the ended grant authorizes nothing further.
+    // SESSION-09/10: the ended grant authorizes nothing further, and an old
+    // paired streaming client cannot keep sending input.
     app.grants.revoke(&id);
+    close_paired_client_bypass(&app).await;
     Ok(())
 }
 
@@ -995,5 +1070,71 @@ pub async fn trust_revoke(
     .await?;
     // TRUST-02: every active grant of that controller dies with the revocation.
     app.grants.revoke_device(&controller_device_id);
+    close_paired_client_bypass(&app).await;
     Ok(())
+}
+
+/// Restore host input if a view-only session changed it, then unpair every
+/// streaming client so a previous pairing cannot bypass the new policy.
+async fn close_paired_client_bypass(app: &AppState) {
+    let _ = crate::sunshine::set_remote_input(&app.http_local, &app.config_dir, true).await;
+    let _ = crate::sunshine::unpair_all(&app.http_local).await;
+    crate::moonlight::mark_stream_revoked(app);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn placeholder_account_config_is_not_configured() {
+        // Shares the process environment with the env-override test. Without
+        // the lock, a parallel run on Windows sees NODEDESK_GOOGLE_CLIENT_ID
+        // and treats the placeholder file as configured.
+        let _env = crate::state::testenv::lock();
+        std::env::remove_var("NODEDESK_GOOGLE_CLIENT_ID");
+        std::env::remove_var("NODEDESK_DIRECTORY_URL");
+        let dir = std::env::temp_dir().join("nodedesk-account-config-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("account.json"),
+            r#"{"clientId":"YOUR_GOOGLE_OAUTH_CLIENT_ID.apps.googleusercontent.com","directoryUrl":"https://directory.example.com"}"#,
+        )
+        .unwrap();
+        assert!(load_account_config(&dir).is_none());
+        std::fs::write(
+            dir.join("account.json"),
+            r#"{"clientId":"123-abc.apps.googleusercontent.com","directoryUrl":"https://nodedesk.berkkarabacak.com"}"#,
+        )
+        .unwrap();
+        let loaded = load_account_config(&dir).unwrap();
+        assert_eq!(loaded.directory_url, "https://nodedesk.berkkarabacak.com");
+        assert!(loaded.client_id.ends_with(".apps.googleusercontent.com"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn env_config_overrides_the_file_and_device_id_is_read_not_invented() {
+        let _env = crate::state::testenv::lock();
+        let dir = std::env::temp_dir().join("nodedesk-account-env-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("account.json"),
+            r#"{"clientId":"file-client.apps.googleusercontent.com","directoryUrl":"https://example.invalid"}"#,
+        )
+        .unwrap();
+        std::env::set_var("NODEDESK_GOOGLE_CLIENT_ID", "env-client.apps.googleusercontent.com");
+        std::env::set_var("NODEDESK_DIRECTORY_URL", "https://nodedesk.berkkarabacak.com/");
+        let loaded = load_account_config(&dir).unwrap();
+        assert_eq!(loaded.client_id, "env-client.apps.googleusercontent.com");
+        assert_eq!(loaded.directory_url, "https://nodedesk.berkkarabacak.com");
+        assert!(local_device_id(&dir).is_none());
+        std::fs::write(dir.join("device.json"), r#"{"deviceId":"dev-c1","name":"Odin"}"#).unwrap();
+        assert_eq!(local_device_id(&dir).as_deref(), Some("dev-c1"));
+        std::env::remove_var("NODEDESK_GOOGLE_CLIENT_ID");
+        std::env::remove_var("NODEDESK_DIRECTORY_URL");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

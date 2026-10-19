@@ -319,6 +319,145 @@ pub async fn approve_pin(client: &reqwest::Client, pin: &str) -> Result<(), Stri
     }
 }
 
+/// Sunshine `POST /api/config` replaces the whole config file with the keys
+/// in the body. This keeps every existing key and only flips the input
+/// switches. `status`, `platform`, and `version` are response metadata and
+/// must not be written back.
+pub fn config_with_input(current: &serde_json::Value, allow_input: bool) -> Result<serde_json::Value, String> {
+    let obj = current.as_object().ok_or("Sunshine config was not an object")?;
+    let mut out = serde_json::Map::new();
+    for (key, value) in obj {
+        if matches!(key.as_str(), "status" | "platform" | "version") {
+            continue;
+        }
+        out.insert(key.clone(), value.clone());
+    }
+    let flag = serde_json::Value::Bool(allow_input);
+    out.insert("mouse".into(), flag.clone());
+    out.insert("keyboard".into(), flag.clone());
+    out.insert("controller".into(), flag);
+    Ok(serde_json::Value::Object(out))
+}
+
+/// UUIDs from `GET /api/clients/list`. Missing or malformed entries are skipped.
+#[cfg(test)]
+pub fn client_uuids(list: &serde_json::Value) -> Vec<String> {
+    list.get("named_certs")
+        .and_then(|v| v.as_array())
+        .map(|certs| {
+            certs
+                .iter()
+                .filter_map(|cert| cert.get("uuid").and_then(|u| u.as_str()).map(|s| s.to_string()))
+                .filter(|uuid| !uuid.is_empty())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+async fn api_json(
+    client: &reqwest::Client,
+    method: reqwest::Method,
+    path: &str,
+    body: Option<&serde_json::Value>,
+    auth: &str,
+) -> Result<serde_json::Value, String> {
+    let mut request = client
+        .request(method, format!("{}{path}", api_base()))
+        .header("Authorization", auth);
+    if let Some(body) = body {
+        request = request.json(body);
+    }
+    let response = request
+        .send()
+        .await
+        .map_err(|e| format!("cannot reach the host service: {e}"))?;
+    if !response.status().is_success() {
+        return Err(format!("the host service refused {path}"));
+    }
+    response.json().await.map_err(|e| e.to_string())
+}
+
+/// Turn remote keyboard, mouse, and gamepad input off or on.
+///
+/// Sunshine applies `mouse` / `keyboard` / `controller` from its config at
+/// startup, so a change is followed by a restart. The previous values are
+/// kept beside the app config (not in settings.json) so a view-only session
+/// can be undone. Fails closed: a partial config is never posted.
+pub async fn set_remote_input(client: &reqwest::Client, config_dir: &std::path::Path, allow_input: bool) -> Result<(), String> {
+    let auth = auth_header()?;
+    set_remote_input_with(client, config_dir, allow_input, &auth).await
+}
+
+pub async fn set_remote_input_with(
+    client: &reqwest::Client,
+    config_dir: &std::path::Path,
+    allow_input: bool,
+    auth: &str,
+) -> Result<(), String> {
+    let current = api_json(client, reqwest::Method::GET, "/api/config", None, auth).await?;
+    if !allow_input {
+        let snapshot = serde_json::json!({
+            "mouse": current.get("mouse").cloned().unwrap_or(serde_json::Value::Bool(true)),
+            "keyboard": current.get("keyboard").cloned().unwrap_or(serde_json::Value::Bool(true)),
+            "controller": current.get("controller").cloned().unwrap_or(serde_json::Value::Bool(true)),
+        });
+        let _ = std::fs::create_dir_all(config_dir);
+        std::fs::write(config_dir.join("input-gate.json"), snapshot.to_string()).map_err(|e| e.to_string())?;
+    }
+    let body = if allow_input {
+        if let Ok(text) = std::fs::read_to_string(config_dir.join("input-gate.json")) {
+            if let Ok(saved) = serde_json::from_str::<serde_json::Value>(&text) {
+                let mut merged = config_with_input(&current, true)?;
+                if let Some(obj) = merged.as_object_mut() {
+                    for key in ["mouse", "keyboard", "controller"] {
+                        if let Some(value) = saved.get(key) {
+                            obj.insert(key.to_string(), value.clone());
+                        }
+                    }
+                }
+                let _ = std::fs::remove_file(config_dir.join("input-gate.json"));
+                merged
+            } else {
+                config_with_input(&current, true)?
+            }
+        } else {
+            // Nothing was gated. Don't restart the host just to rewrite config.
+            return Ok(());
+        }
+    } else {
+        config_with_input(&current, false)?
+    };
+    let _ = api_json(client, reqwest::Method::POST, "/api/config", Some(&body), auth).await?;
+    let _ = api_json(
+        client,
+        reqwest::Method::POST,
+        "/api/restart",
+        Some(&serde_json::json!({})),
+        auth,
+    )
+    .await?;
+    Ok(())
+}
+
+/// Drop every paired streaming client so an old pairing cannot keep sending
+/// input after a revoke, sign-out, or session end (APPROVAL-05 bypass).
+pub async fn unpair_all(client: &reqwest::Client) -> Result<(), String> {
+    let auth = auth_header()?;
+    unpair_all_with(client, &auth).await
+}
+
+pub async fn unpair_all_with(client: &reqwest::Client, auth: &str) -> Result<(), String> {
+    let _ = api_json(
+        client,
+        reqwest::Method::POST,
+        "/api/clients/unpair-all",
+        Some(&serde_json::json!({})),
+        auth,
+    )
+    .await?;
+    Ok(())
+}
+
 pub async fn api_reachable(client: &reqwest::Client) -> bool {
     client
         .get(format!("{}/api/config", api_base()))
@@ -341,5 +480,123 @@ mod tests {
         assert_eq!(clean_pin("123"), None);
         assert_eq!(clean_pin("12345"), None);
         assert_eq!(clean_pin("abcd"), None);
+    }
+
+    #[test]
+    fn input_config_preserves_unrelated_keys_and_drops_metadata() {
+        let current = serde_json::json!({
+            "status": true,
+            "platform": "linux",
+            "version": "0.23.0",
+            "port": 47989,
+            "mouse": true,
+            "keyboard": true,
+            "controller": true,
+            "encoder": "nvenc"
+        });
+        let body = config_with_input(&current, false).unwrap();
+        assert!(body.get("status").is_none());
+        assert!(body.get("platform").is_none());
+        assert!(body.get("version").is_none());
+        assert_eq!(body["port"], 47989);
+        assert_eq!(body["encoder"], "nvenc");
+        assert_eq!(body["mouse"], false);
+        assert_eq!(body["keyboard"], false);
+        assert_eq!(body["controller"], false);
+    }
+
+    #[test]
+    fn client_uuids_reads_the_paired_list() {
+        let list = serde_json::json!({
+            "status": true,
+            "named_certs": [
+                { "uuid": "abc", "name": "Odin" },
+                { "name": "missing" },
+                { "uuid": "", "name": "blank" }
+            ]
+        });
+        assert_eq!(client_uuids(&list), vec!["abc".to_string()]);
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn view_only_posts_the_full_config_and_unpair_is_explicit() {
+        use std::sync::{Arc, Mutex};
+
+        let seen = Arc::new(Mutex::new(Vec::<String>::new()));
+        let record = seen.clone();
+        let app = axum::Router::new()
+            .route(
+                "/api/config",
+                axum::routing::get(|| async {
+                    axum::Json(serde_json::json!({
+                        "status": true,
+                        "platform": "linux",
+                        "version": "test",
+                        "encoder": "software",
+                        "mouse": true,
+                        "keyboard": true,
+                        "controller": true
+                    }))
+                })
+                .post(move |axum::Json(body): axum::Json<serde_json::Value>| {
+                    let record = record.clone();
+                    async move {
+                        record.lock().unwrap().push(body.to_string());
+                        axum::Json(serde_json::json!({ "status": true }))
+                    }
+                }),
+            )
+            .route(
+                "/api/restart",
+                axum::routing::post({
+                    let seen = seen.clone();
+                    move || {
+                        let seen = seen.clone();
+                        async move {
+                            seen.lock().unwrap().push("restart".into());
+                            axum::Json(serde_json::json!({ "status": true }))
+                        }
+                    }
+                }),
+            )
+            .route(
+                "/api/clients/unpair-all",
+                axum::routing::post({
+                    let seen = seen.clone();
+                    move || {
+                        let seen = seen.clone();
+                        async move {
+                            seen.lock().unwrap().push("unpair-all".into());
+                            axum::Json(serde_json::json!({ "status": true }))
+                        }
+                    }
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+
+        let _env = crate::state::testenv::lock();
+        std::env::set_var("NODEDESK_SUNSHINE_API", format!("http://{addr}"));
+        let dir = std::env::temp_dir().join("nodedesk-input-gate-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let client = reqwest::Client::new();
+        set_remote_input_with(&client, &dir, false, "Basic dGVzdA==")
+            .await
+            .unwrap();
+        let posted = seen.lock().unwrap().clone();
+        let config_post = posted.iter().find(|line| line.contains("encoder")).expect("config posted");
+        assert!(config_post.contains("\"encoder\":\"software\""));
+        assert!(config_post.contains("\"mouse\":false"));
+        assert!(!config_post.contains("platform"));
+        assert!(posted.iter().any(|line| line == "restart"));
+        unpair_all_with(&client, "Basic dGVzdA==").await.unwrap();
+        assert!(seen.lock().unwrap().iter().any(|line| line == "unpair-all"));
+        std::env::remove_var("NODEDESK_SUNSHINE_API");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

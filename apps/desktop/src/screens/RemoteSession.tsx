@@ -40,10 +40,20 @@ export function ConnectionOverlay({
               {state.kind === 'authorizing' && `Checking access to ${state.target.name}…`}
               {state.kind === 'awaitingApproval' && `Waiting for someone to accept on ${state.target.name}.`}
               {state.kind === 'connecting' && `Connecting to ${state.target.name}…`}
+              {state.kind === 'reconnecting' && `Reconnecting to ${state.target.name}…`}
             </p>
             {state.kind === 'awaitingApproval' && (
               <p className="mt-2 text-xs text-nd-dim">
                 The request expires {SESSION_CONSTANTS.connectTimeoutMs / 1000} seconds after it was sent.
+              </p>
+            )}
+            {state.kind === 'connecting' && (
+              <p className="mt-2 text-xs text-nd-dim">Waiting until the other computer is actually on screen.</p>
+            )}
+            {state.kind === 'reconnecting' && (
+              <p className="mt-2 text-xs text-nd-dim">
+                The picture is paused. Trying again (attempt {state.attempt} of {SESSION_CONSTANTS.reconnectDelaysMs.length}
+                ).
               </p>
             )}
             <div role="progressbar" aria-label="Connection in progress" className="mt-4 h-1 w-full bg-nd-rule">
@@ -310,7 +320,7 @@ export default function RemoteSession({
         </p>
         <p className="mt-2 text-sm text-nd-dim">
           {isNativeShell
-            ? 'The desktop stream is open in the Moonlight viewer window. The integrated in-app viewer is on the roadmap — disconnect here when you are done.'
+            ? 'The desktop is open in its own viewer window. Disconnect here when you are done.'
             : 'Preview simulation: no real stream is running.'}
         </p>
         {!isNativeShell && (

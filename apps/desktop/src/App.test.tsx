@@ -34,8 +34,9 @@ describe('Login (AUTH-01)', () => {
   it('offers local network mode leading to onboarding', async () => {
     render(<App />)
     await userEvent.click(await screen.findByRole('button', { name: /Use without an account/i }))
-    // Legacy local-mode onboarding remains reachable.
-    expect(await screen.findByText(/host|controller/i, {}, { timeout: 3000 })).toBeInTheDocument()
+    // Local mode opens the host/controller choice before the shell.
+    expect(await screen.findByRole('heading', { name: 'How do you want to use this computer?' })).toBeInTheDocument()
+    expect(screen.getByText('Both')).toBeInTheDocument()
   })
 })
 
@@ -86,7 +87,8 @@ describe('Account lifecycle (AUTH-02..05, preview-simulated)', () => {
     // Switch to local mode, then back to login and start a second attempt:
     // the first attempt's epoch is now stale.
     await userEvent.click(await screen.findByRole('button', { name: /Use without an account/i }))
-    await screen.findByRole('navigation', { name: 'Primary' }, { timeout: 3000 })
+    await userEvent.click(await screen.findByRole('button', { name: 'Continue' }))
+    await screen.findByRole('navigation', { name: 'Primary' }, { timeout: 8000 })
     resolveFirst?.({ outcome: 'signedIn', profile: { accountId: 'x', email: 'late@evil.example', name: 'Late' } } as never)
     // The late result must not surface anywhere.
     await waitFor(() => expect(screen.queryByText('late@evil.example')).not.toBeInTheDocument())

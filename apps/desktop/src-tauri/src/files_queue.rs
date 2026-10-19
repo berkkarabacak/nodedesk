@@ -44,6 +44,7 @@ impl Transfer {
             "direction": self.direction,
             "file": self.file,
             "address": self.address,
+            "dest": self.dest,
             "doneBytes": self.done.load(Ordering::SeqCst),
             "totalBytes": self.total_bytes,
             "state": self.state.lock().map(|s| s.clone()).unwrap_or_default(),

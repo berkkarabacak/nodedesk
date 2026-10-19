@@ -18,7 +18,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time"]
 axum = "0.7"
 sysinfo = "0.32"
 keyring = "3"
-zip = { version = "2", default-features = false, features = ["deflate"] }
+zip = { version = "9", default-features = false, features = ["deflate"] }
 base64 = "0.22"
 rand = "0.8"
 hmac = "0.12"

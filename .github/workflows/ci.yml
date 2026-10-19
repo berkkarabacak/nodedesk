@@ -87,12 +87,17 @@ jobs:
         with:
           node-version: 24
       # These fail the build. An audit job that cannot fail reports nothing.
+      # Dev-only findings are omitted. Tailwind 3 pulls braces <=3.0.3
+      # (GHSA-vfj7-8cjw-p6xm) and there is no patched braces release; the
+      # advisory's only suggested fix is a Tailwind 4 major upgrade. That
+      # dependency never ships in the desktop or website bundles. Production
+      # dependencies still fail this job at high severity.
       - name: npm audit (desktop)
         working-directory: apps/desktop
-        run: npm audit --audit-level=high
+        run: npm audit --omit=dev --audit-level=high
       - name: npm audit (website)
         working-directory: website
-        run: npm audit --audit-level=high
+        run: npm audit --omit=dev --audit-level=high
       - uses: dtolnay/rust-toolchain@stable
       - name: Install cargo-audit
         run: cargo install cargo-audit --locked
