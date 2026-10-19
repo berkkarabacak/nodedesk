@@ -1088,6 +1088,12 @@ mod tests {
 
     #[test]
     fn placeholder_account_config_is_not_configured() {
+        // Shares the process environment with the env-override test. Without
+        // the lock, a parallel run on Windows sees NODEDESK_GOOGLE_CLIENT_ID
+        // and treats the placeholder file as configured.
+        let _env = crate::state::testenv::lock();
+        std::env::remove_var("NODEDESK_GOOGLE_CLIENT_ID");
+        std::env::remove_var("NODEDESK_DIRECTORY_URL");
         let dir = std::env::temp_dir().join("nodedesk-account-config-test");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
