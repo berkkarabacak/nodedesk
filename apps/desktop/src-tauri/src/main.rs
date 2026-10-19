@@ -21,6 +21,7 @@ mod monitor;
 mod moonlight;
 mod release;
 mod safepath;
+mod session;
 mod state;
 mod sunshine;
 mod terminal;
@@ -371,10 +372,10 @@ async fn connect_computer(app: AppHandle, address: String, quality: Option<Strin
             _ => {} // "auto": use the persisted default as-is
         }
     }
-    moonlight::start_stream(&state, exe, &settings, &address)?;
-    // Process spawn is NOT session readiness (SESSION-02): this event means
-    // the external viewer process started. True stream-readiness detection is
-    // the documented native spike (docs/ui-redesign/NATIVE_SPIKE.md).
+    moonlight::start_stream(&app, exe, &settings, &address)?;
+    // Process spawn is NOT session readiness (SESSION-02). `stream-started`
+    // means the viewer process exists. `stream-ready` is emitted only after
+    // Moonlight logs the upstream video-stream line.
     let _ = app.emit("stream-started", &address);
     moonlight::watch_stream(app.clone());
     Ok(())
@@ -444,11 +445,15 @@ async fn power_action(state: State<'_, AppState>, address: String, action: Strin
         .ok_or("No access code stored for this computer — add it again with its code")?;
     // `send_ok` fails on a rejected request, so the UI cannot report a
     // shutdown the host actually refused.
-    client::AgentRequest::post(&address, discovery::agent_port(), "/power")
-        .json(&serde_json::json!({ "action": action }))?
-        .timeout(std::time::Duration::from_millis(2500))
-        .send_ok(&state.http, &code)
-        .await?;
+    with_session(
+        client::AgentRequest::post(&address, discovery::agent_port(), "/power"),
+        &state,
+        &address,
+    )
+    .json(&serde_json::json!({ "action": action }))?
+    .timeout(std::time::Duration::from_millis(2500))
+    .send_ok(&state.http, &code)
+    .await?;
     Ok(())
 }
 
@@ -608,11 +613,15 @@ async fn check_update(state: State<'_, AppState>) -> Result<update::UpdateInfo, 
 async fn list_files(state: State<'_, AppState>, address: String, path: String) -> Result<Vec<files::FileEntry>, String> {
     let code = state::code_for_host(&state, &address)
         .ok_or("No access code stored for this computer")?;
-    client::AgentRequest::get(&address, discovery::agent_port(), "/files/list")
-        .query(vec![("path", path)])
-        .timeout(std::time::Duration::from_millis(3000))
-        .send_ok(&state.http, &code)
-        .await?
+    with_session(
+        client::AgentRequest::get(&address, discovery::agent_port(), "/files/list"),
+        &state,
+        &address,
+    )
+    .query(vec![("path", path)])
+    .timeout(std::time::Duration::from_millis(3000))
+    .send_ok(&state.http, &code)
+    .await?
         .json::<Vec<files::FileEntry>>()
         .await
         .map_err(|e| e.to_string())
@@ -662,12 +671,7 @@ async fn send_files(
         });
         ids.push(transfer.id.clone());
         let app2 = app.clone();
-        let ctx = files::TransferContext {
-            http: state.http.clone(),
-            code: crate::state::code_for_host(&state, &address)
-                .ok_or("No access code stored for this computer — add it with its code first")?,
-            grant: state.session_grants.lock().ok().and_then(|g| g.get(&address).cloned()),
-        };
+        let ctx = transfer_context(&state, &address)?;
         tauri::async_runtime::spawn(async move {
             let _ = files::send_transfer(&ctx, &app2, &transfer).await;
         });
@@ -705,12 +709,7 @@ async fn download_file(
     });
     let id = transfer.id.clone();
     let app2 = app.clone();
-    let ctx = files::TransferContext {
-        http: state.http.clone(),
-        code: crate::state::code_for_host(&state, &address)
-            .ok_or("No access code stored for this computer — add it with its code first")?,
-        grant: state.session_grants.lock().ok().and_then(|g| g.get(&address).cloned()),
-    };
+    let ctx = transfer_context(&state, &address)?;
     tauri::async_runtime::spawn(async move {
         let _ = files::download_transfer(&ctx, &app2, &transfer).await;
     });
@@ -754,12 +753,7 @@ async fn retry_transfer(app: AppHandle, transfer_id: String) -> Result<(), Strin
     transfer.cancel.store(false, std::sync::atomic::Ordering::SeqCst);
     transfer.set_state("queued");
     let app2 = app.clone();
-    let ctx = files::TransferContext {
-        http: state.http.clone(),
-        code: crate::state::code_for_host(&state, &transfer.address)
-            .ok_or("No access code stored for this computer — add it with its code first")?,
-        grant: state.session_grants.lock().ok().and_then(|g| g.get(&transfer.address).cloned()),
-    };
+    let ctx = transfer_context(&state, &transfer.address)?;
     tauri::async_runtime::spawn(async move {
         if transfer.direction == "up" {
             let _ = files::send_transfer(&ctx, &app2, &transfer).await;
@@ -782,6 +776,27 @@ fn agent_cert_fingerprint(state: State<'_, AppState>) -> Result<String, String> 
     Ok(tls::load_or_create(&state.config_dir)?.fingerprint)
 }
 
+fn transfer_context(state: &AppState, address: &str) -> Result<files::TransferContext, String> {
+    Ok(files::TransferContext {
+        http: state.http.clone(),
+        code: crate::state::code_for_host(state, address)
+            .ok_or_else(|| "No access code stored for this computer — add it with its code first".to_string())?,
+        grant: session_grant_for(state, address),
+        controller: google_auth::local_device_id(&state.config_dir),
+    })
+}
+
+fn session_grant_for(state: &AppState, address: &str) -> Option<String> {
+    state.session_grants.lock().ok().and_then(|g| g.get(address).cloned())
+}
+
+/// Attach the active session grant and this controller's device id so the
+/// host can enforce the approved capabilities (APPROVAL-06/07).
+fn with_session<'a>(req: client::AgentRequest<'a>, state: &AppState, address: &str) -> client::AgentRequest<'a> {
+    req.grant(session_grant_for(state, address))
+        .controller(google_auth::local_device_id(&state.config_dir))
+}
+
 /// Register the grant token (request ID) for an accepted outgoing session;
 /// subsequent agent calls to that host carry it (APPROVAL-06).
 #[tauri::command]
@@ -799,6 +814,44 @@ fn session_grant_clear(state: State<'_, AppState>, address: String) {
     }
 }
 
+/// The host revoked this session. Stop the viewer and do not reconnect.
+#[tauri::command]
+fn session_mark_revoked(app: AppHandle) {
+    let state = app.state::<AppState>();
+    moonlight::mark_stream_revoked(&state);
+    let _ = app.emit("stream-revoked", true);
+}
+
+/// Open the folder a completed download landed in (FILE-02). The path must
+/// stay inside the downloads directory.
+#[tauri::command]
+fn reveal_download_folder(path: Option<String>) -> Result<(), String> {
+    let root = files::download_dir().ok_or("No downloads folder is available.")?;
+    let _ = std::fs::create_dir_all(&root);
+    let target = files::reveal_target(&root, path.as_deref())?;
+    let _ = std::fs::create_dir_all(&target);
+    open_folder(&target)
+}
+
+fn open_folder(path: &std::path::Path) -> Result<(), String> {
+    let path = path.to_string_lossy().to_string();
+    #[cfg(windows)]
+    let status = std::process::Command::new("explorer").arg(&path).status();
+    #[cfg(target_os = "macos")]
+    let status = std::process::Command::new("open").arg(&path).status();
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let status = std::process::Command::new("xdg-open").arg(&path).status();
+    status
+        .map_err(|e| format!("could not open the folder: {e}"))
+        .and_then(|s| {
+            if s.success() {
+                Ok(())
+            } else {
+                Err("could not open the folder".into())
+            }
+        })
+}
+
 #[tauri::command]
 fn headless_status() -> headless::HeadlessStatus {
     headless::status()
@@ -813,11 +866,15 @@ async fn enable_headless(state: State<'_, AppState>) -> Result<(), String> {
 async fn terminal_exec(state: State<'_, AppState>, address: String, command: String, cwd: String) -> Result<terminal::TerminalResult, String> {
     let code = state::code_for_host(&state, &address)
         .ok_or("No access code stored for this computer")?;
-    client::AgentRequest::post(&address, discovery::agent_port(), "/terminal")
-        .json(&serde_json::json!({ "command": command, "cwd": cwd }))?
-        .timeout(std::time::Duration::from_secs(35))
-        .send_ok(&state.http, &code)
-        .await?
+    with_session(
+        client::AgentRequest::post(&address, discovery::agent_port(), "/terminal"),
+        &state,
+        &address,
+    )
+    .json(&serde_json::json!({ "command": command, "cwd": cwd }))?
+    .timeout(std::time::Duration::from_secs(35))
+    .send_ok(&state.http, &code)
+    .await?
         .json::<terminal::TerminalResult>()
         .await
         .map_err(|e| e.to_string())
@@ -929,6 +986,8 @@ fn main() {
             agent_cert_fingerprint,
             session_grant_register,
             session_grant_clear,
+            session_mark_revoked,
+            reveal_download_folder,
             terminal_exec,
             headless_status,
             enable_headless,

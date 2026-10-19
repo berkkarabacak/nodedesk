@@ -1,4 +1,4 @@
 {
-  "clientId": "YOUR_DESKTOP_CLIENT_ID.apps.googleusercontent.com",
-  "directoryUrl": "https://directory.example.com"
+  "clientId": "YOUR_GOOGLE_OAUTH_CLIENT_ID.apps.googleusercontent.com",
+  "directoryUrl": "https://nodedesk.berkkarabacak.com"
 }

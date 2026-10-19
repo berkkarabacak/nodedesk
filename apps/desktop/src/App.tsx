@@ -112,8 +112,10 @@ export default function App() {
   // keeps its own override after that (changeQuality never writes the default).
   const connectTo = (target: ConnectionTarget) => {
     const withDefault: ConnectionTarget = { quality: settings.qualityPreset ?? 'auto', ...target }
-    const k = connection.state.kind
-    if (k === 'connected' && connection.state.target.deviceId !== withDefault.deviceId) {
+    if (
+      (connection.state.kind === 'connected' || connection.state.kind === 'reconnecting') &&
+      connection.state.target.deviceId !== withDefault.deviceId
+    ) {
       setReplaceTarget(withDefault)
       return
     }
@@ -123,7 +125,7 @@ export default function App() {
   // AUTH-09: signing out with an active session explains the interruption.
   const [signOutPending, setSignOutPending] = useState(false)
   const doSignOut = () => {
-    if (connection.state.kind === 'connected') {
+    if (connection.state.kind === 'connected' || connection.state.kind === 'reconnecting') {
       setSignOutPending(true)
       return
     }

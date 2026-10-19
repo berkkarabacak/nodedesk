@@ -5,11 +5,14 @@
 //! refresh, gamepad/mouse/keyboard input and clipboard sync — all upstream.
 
 use serde::Deserialize;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::Ordering;
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
 
+use crate::session::{self, Recovery, StreamSignal};
 use crate::state::{AppState, Settings};
 
 const GITHUB_RELEASE: &str = "https://api.github.com/repos/moonlight-stream/moonlight-qt/releases/latest";
@@ -238,16 +241,42 @@ pub fn stream_args(settings: &Settings, host: &str) -> Vec<String> {
     args
 }
 
-pub fn start_stream(state: &AppState, exe: PathBuf, settings: &Settings, host: &str) -> Result<(), String> {
+pub fn start_stream(app: &AppHandle, exe: PathBuf, settings: &Settings, host: &str) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    state.stream_user_stop.store(false, Ordering::SeqCst);
+    state.stream_revoked.store(false, Ordering::SeqCst);
+    state.stream_ready.store(false, Ordering::SeqCst);
+    state.stream_saw_failure.store(false, Ordering::SeqCst);
+    state.stream_attempt.store(0, Ordering::SeqCst);
     let args = stream_args(settings, host);
-    let child = Command::new(exe)
-        .args(&args)
+    if let Ok(mut launch) = state.stream_launch.lock() {
+        *launch = Some(crate::state::StreamLaunch {
+            exe: exe.clone(),
+            args: args.clone(),
+            host: host.to_string(),
+        });
+    }
+    spawn_viewer(app, &exe, &args)
+}
+
+fn spawn_viewer(app: &AppHandle, exe: &Path, args: &[String]) -> Result<(), String> {
+    let mut child = Command::new(exe)
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| format!("failed to start Moonlight: {e}"))?;
+    // SESSION-02: readiness is a line from the viewer, not the fact that it spawned.
+    if let Some(stdout) = child.stdout.take() {
+        spawn_output_reader(app.clone(), stdout);
+    }
+    if let Some(stderr) = child.stderr.take() {
+        spawn_output_reader(app.clone(), stderr);
+    }
+    let state = app.state::<AppState>();
     let mut guard = state.stream_child.lock().map_err(|e| e.to_string())?;
     // SESSION-06: one outgoing session at a time. Never silently overwrite a
-    // running viewer's handle — the old process would leak. Callers must end
-    // the previous session first; a stale handle is cleaned up explicitly.
+    // running viewer's handle — the old process would leak.
     if let Some(mut old) = guard.take() {
         let _ = old.kill();
         let _ = old.wait();
@@ -256,12 +285,46 @@ pub fn start_stream(state: &AppState, exe: PathBuf, settings: &Settings, host: &
     Ok(())
 }
 
-/// Watches the running viewer process; emits `stream-exited` with its exit
-/// status when it ends for any reason (quit, crash, kill — SESSION-11).
-/// The UI treats process exit as the end of the interim external-viewer
-/// session; it is not used as a readiness signal.
+fn spawn_output_reader(app: AppHandle, pipe: impl Read + Send + 'static) {
+    std::thread::spawn(move || {
+        for line in BufReader::new(pipe).lines() {
+            let Ok(line) = line else { break };
+            match session::classify_stream_line(&line) {
+                StreamSignal::Ready => {
+                    if let Some(state) = app.try_state::<AppState>() {
+                        state.stream_ready.store(true, Ordering::SeqCst);
+                        state.stream_attempt.store(0, Ordering::SeqCst);
+                    }
+                    let _ = app.emit("stream-ready", true);
+                }
+                StreamSignal::Failed => {
+                    if let Some(state) = app.try_state::<AppState>() {
+                        state.stream_saw_failure.store(true, Ordering::SeqCst);
+                    }
+                    let _ = app.emit("stream-failed-line", line);
+                }
+                StreamSignal::Ignore => {}
+            }
+        }
+    });
+}
+
+/// Watches the viewer. A clean user stop emits `stream-exited`. An exit
+/// before readiness fails the attempt. A drop after readiness reconnects on
+/// the 1/2/4 s schedule unless the grant was revoked (SESSION-07/08/11).
 pub fn watch_stream(app: AppHandle) {
-    std::thread::spawn(move || loop {
+    let generation = {
+        let state = app.state::<AppState>();
+        state.stream_generation.fetch_add(1, Ordering::SeqCst) + 1
+    };
+    std::thread::spawn(move || watcher(app, generation));
+}
+
+fn watcher(app: AppHandle, generation: u64) {
+    loop {
+        if !still_current(&app, generation) {
+            return;
+        }
         let exited = {
             let state = app.state::<AppState>();
             let mut guard = match state.stream_child.lock() {
@@ -280,18 +343,102 @@ pub fn watch_stream(app: AppHandle) {
                         Some(false)
                     }
                 },
-                None => return, // no active stream: stop watching
+                None => return,
             }
         };
-        if let Some(success) = exited {
-            let _ = app.emit("stream-exited", success);
+        let Some(clean_exit) = exited else {
+            std::thread::sleep(Duration::from_millis(200));
+            continue;
+        };
+        if !still_current(&app, generation) {
             return;
         }
-        std::thread::sleep(std::time::Duration::from_millis(500));
-    });
+        let state = app.state::<AppState>();
+        let decision = session::on_process_exit(
+            state.stream_ready.load(Ordering::SeqCst),
+            clean_exit,
+            state.stream_saw_failure.load(Ordering::SeqCst),
+            state.stream_attempt.load(Ordering::SeqCst),
+            state.stream_revoked.load(Ordering::SeqCst),
+            state.stream_user_stop.load(Ordering::SeqCst),
+        );
+        match decision {
+            Recovery::Stop => {
+                let _ = app.emit("stream-exited", true);
+                return;
+            }
+            Recovery::GiveUp => {
+                // Distinct from stream-exited so the UI does not start a second schedule.
+                let _ = app.emit("stream-reconnect-failed", true);
+                return;
+            }
+            Recovery::Retry { delay_ms, attempt } => {
+                state.stream_attempt.store(attempt, Ordering::SeqCst);
+                state.stream_ready.store(false, Ordering::SeqCst);
+                state.stream_saw_failure.store(false, Ordering::SeqCst);
+                let _ = app.emit(
+                    "stream-reconnecting",
+                    serde_json::json!({ "attempt": attempt, "delayMs": delay_ms }),
+                );
+                if !sleep_interruptible(&app, generation, Duration::from_millis(delay_ms)) {
+                    // A user stop or a newer launch also aborts the wait. Only
+                    // a revoked grant tells the UI the host ended the session.
+                    if state.stream_revoked.load(Ordering::SeqCst) {
+                        let _ = app.emit("stream-revoked", true);
+                    }
+                    return;
+                }
+                let launch = state.stream_launch.lock().ok().and_then(|g| g.clone());
+                let Some(launch) = launch else {
+                    let _ = app.emit("stream-reconnect-failed", true);
+                    return;
+                };
+                if spawn_viewer(&app, &launch.exe, &launch.args).is_err() {
+                    let _ = app.emit("stream-reconnect-failed", true);
+                    return;
+                }
+                let _ = app.emit("stream-started", &launch.host);
+            }
+        }
+    }
+}
+
+fn still_current(app: &AppHandle, generation: u64) -> bool {
+    let state = app.state::<AppState>();
+    state.stream_generation.load(Ordering::SeqCst) == generation
+        && !state.stream_revoked.load(Ordering::SeqCst)
+        && !state.stream_user_stop.load(Ordering::SeqCst)
+}
+
+/// Sleep in short slices so revocation or a new launch aborts the wait.
+fn sleep_interruptible(app: &AppHandle, generation: u64, total: Duration) -> bool {
+    let deadline = Instant::now() + total;
+    while Instant::now() < deadline {
+        if !still_current(app, generation) {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    still_current(app, generation)
 }
 
 pub fn stop_stream(state: &AppState) {
+    state.stream_user_stop.store(true, Ordering::SeqCst);
+    // Retire the watcher before the child dies, so the exit is not a reconnect.
+    state.stream_generation.fetch_add(1, Ordering::SeqCst);
+    if let Ok(mut guard) = state.stream_child.lock() {
+        if let Some(mut child) = guard.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
+/// SESSION-08: the host revoked this controller's grant. Kill the viewer and
+/// do not relaunch it.
+pub fn mark_stream_revoked(state: &AppState) {
+    state.stream_revoked.store(true, Ordering::SeqCst);
+    state.stream_generation.fetch_add(1, Ordering::SeqCst);
     if let Ok(mut guard) = state.stream_child.lock() {
         if let Some(mut child) = guard.take() {
             let _ = child.kill();

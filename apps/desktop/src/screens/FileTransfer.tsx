@@ -289,6 +289,14 @@ export default function FileTransfer({
                           Retry
                         </button>
                       )}
+                      {t.state === 'completed' && t.direction === 'down' && (
+                        <button
+                          onClick={() => void api.revealDownloadFolder(t.dest).catch((e) => notify(String(e), true))}
+                          className="text-xs font-semibold text-nd-accent-strong underline"
+                        >
+                          Open folder
+                        </button>
+                      )}
                     </span>
                   </div>
                   <div

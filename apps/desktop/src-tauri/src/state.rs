@@ -8,6 +8,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8};
 use std::sync::{Mutex, RwLock};
 
 /// Length of a generated access code. 32 unambiguous characters per position,
@@ -93,6 +94,14 @@ fn default_stay_signed_in() -> bool {
     true
 }
 
+/// Enough to relaunch the same viewer after a short network drop.
+#[derive(Clone)]
+pub struct StreamLaunch {
+    pub exe: PathBuf,
+    pub args: Vec<String>,
+    pub host: String,
+}
+
 pub struct AppState {
     pub config_dir: PathBuf,
     pub settings: RwLock<Settings>,
@@ -101,6 +110,20 @@ pub struct AppState {
     pub http_local: reqwest::Client,
     /// Running Moonlight stream process, if we started one.
     pub stream_child: Mutex<Option<std::process::Child>>,
+    /// Arguments of the viewer we launched, so a drop can relaunch the same target.
+    pub stream_launch: Mutex<Option<StreamLaunch>>,
+    /// Set when Moonlight logs the upstream video-stream line (SESSION-02).
+    pub stream_ready: AtomicBool,
+    /// The viewer logged `Connection terminated` before it exited.
+    pub stream_saw_failure: AtomicBool,
+    /// The user asked to disconnect. A process exit must not reconnect.
+    pub stream_user_stop: AtomicBool,
+    /// The host revoked the grant. Reconnect stops immediately (SESSION-08).
+    pub stream_revoked: AtomicBool,
+    /// How many reconnect attempts have already been consumed.
+    pub stream_attempt: AtomicU8,
+    /// Bumped to retire an in-flight viewer watcher before a new launch.
+    pub stream_generation: AtomicU64,
     /// NodeDesk clipboard channel toggle for the active session (TOOLBAR-05).
     pub session_clipboard: Mutex<bool>,
     /// M7 transfer queue: per-transfer IDs and independent cancellation.
@@ -133,6 +156,13 @@ impl AppState {
             http,
             http_local,
             stream_child: Mutex::new(None),
+            stream_launch: Mutex::new(None),
+            stream_ready: AtomicBool::new(false),
+            stream_saw_failure: AtomicBool::new(false),
+            stream_user_stop: AtomicBool::new(false),
+            stream_revoked: AtomicBool::new(false),
+            stream_attempt: AtomicU8::new(0),
+            stream_generation: AtomicU64::new(0),
             session_clipboard: Mutex::new(false),
             transfers: std::sync::Arc::new(crate::files_queue::TransferQueue::new()),
             grants: std::sync::Arc::new(crate::grants::GrantStore::new()),

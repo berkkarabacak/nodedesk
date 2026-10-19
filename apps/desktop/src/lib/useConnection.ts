@@ -9,9 +9,10 @@ import { SESSION_CONSTANTS } from './sessionConstants'
  *   any pending state -> cancelling -> cancelled
  *   connected -> disconnecting -> disconnected
  *
- * Every async step is bound to an attemptId; late events from a superseded or
- * cancelled attempt are discarded (SESSION-05, AUTH-08). Timers are
- * centralized in SESSION_CONSTANTS and injectable for tests.
+ * `connecting` stays connecting until `stream-ready`. Process spawn
+ * (`stream-started`) is not Connected (SESSION-02). A drop after readiness
+ * retries on the 1/2/4 s schedule unless the host revokes the grant
+ * (SESSION-07/08). Every async step is bound to an attemptId.
  */
 
 export interface ConnectionTarget {
@@ -38,6 +39,15 @@ export type ConnectionState =
       /** The quality actually applied to the running session. */
       quality: QualityPreset
     }
+  | {
+      kind: 'reconnecting'
+      target: ConnectionTarget
+      attemptId: string
+      requestId: string | null
+      attempt: number
+      permissions: SessionPermissions
+      quality: QualityPreset
+    }
   | { kind: 'failed'; target: ConnectionTarget; message: string }
   | { kind: 'cancelled' }
   | { kind: 'disconnecting'; target: ConnectionTarget }
@@ -45,17 +55,45 @@ export type ConnectionState =
 export interface ConnectionOptions {
   approvalPollMs?: number
   connectTimeoutMs?: number
+  reconnectDelaysMs?: readonly number[]
+}
+
+function waitForReady(timeoutMs: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    let settled = false
+    let unlisten: (() => void) | undefined
+    const finish = (ready: boolean) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      unlisten?.()
+      resolve(ready)
+    }
+    const timer = setTimeout(() => finish(false), timeoutMs)
+    // onEvent registers the mock listener synchronously before its first await.
+    void onEvent('stream-ready', () => finish(true)).then((fn) => {
+      unlisten = fn
+      if (settled) fn()
+    })
+  })
 }
 
 export function useConnection(options: ConnectionOptions = {}) {
   const approvalPollMs = options.approvalPollMs ?? SESSION_CONSTANTS.approvalPollMs
   const connectTimeoutMs = options.connectTimeoutMs ?? SESSION_CONSTANTS.connectTimeoutMs
+  const reconnectDelays = options.reconnectDelaysMs ?? SESSION_CONSTANTS.reconnectDelaysMs
+  const delaysRef = useRef(reconnectDelays)
+  delaysRef.current = reconnectDelays
 
   const [state, setState] = useState<ConnectionState>({ kind: 'idle' })
   const attemptRef = useRef(0)
-  const inFlightRef = useRef(false) // synchronous guard (SESSION-03)
+  const inFlightRef = useRef(false)
+  const ignoreExit = useRef(false)
+  const revokedRef = useRef(false)
   const pollTimer = useRef<ReturnType<typeof setInterval> | null>(null)
   const timeoutTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const stateRef = useRef(state)
+  stateRef.current = state
 
   const clearTimers = () => {
     if (pollTimer.current) clearInterval(pollTimer.current)
@@ -63,21 +101,6 @@ export function useConnection(options: ConnectionOptions = {}) {
     pollTimer.current = null
     timeoutTimer.current = null
   }
-
-  // Viewer exit reconciles session state (SESSION-11): the external viewer
-  // closing means the interim session ended.
-  useEffect(() => {
-    let unlisten: (() => void) | undefined
-    void onEvent('stream-exited', () => {
-      inFlightRef.current = false
-      setState((prev) => (prev.kind === 'connected' ? { kind: 'idle' } : prev))
-    }).then((fn) => (unlisten = fn))
-    return () => {
-      unlisten?.()
-      clearTimers()
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
 
   const fail = (target: ConnectionTarget, message: string, attemptId: string) => {
     if (String(attemptRef.current) !== attemptId) return
@@ -97,47 +120,225 @@ export function useConnection(options: ConnectionOptions = {}) {
       }
       const quality: QualityPreset = target.quality ?? 'auto'
       setState({ kind: 'connecting', target, attemptId, requestId })
-      timeoutTimer.current = setTimeout(
-        () => fail(target, "We couldn't reach " + target.name + '.', attemptId),
-        connectTimeoutMs,
-      )
+      if (!target.endpoint) {
+        fail(
+          target,
+          `We couldn't reach ${target.name} from this network. Put both computers on the same network, or set up Tailscale on both — the directory entry alone can't route traffic.`,
+          attemptId,
+        )
+        return
+      }
+      const address = target.endpoint
+      // Bookkeeping for later file and terminal calls. It must not delay the
+      // viewer: the host enforces the grant when those calls arrive.
+      if (requestId) void api.registerSessionGrant(address, requestId).catch(() => {})
+      const readyPromise = waitForReady(connectTimeoutMs)
       try {
-        // The native layer launches the real viewer over a verified route.
-        // 'stream-started' means the viewer process is up — the interim
-        // external-viewer session is labeled as such (SESSION-02 spike).
-        // NETWORK-03: without a verified route there is no fake Connected —
-        // the failure names the actual remedies.
-        if (!target.endpoint) {
-          fail(
-            target,
-            `We couldn't reach ${target.name} from this network. Put both computers on the same network, or set up Tailscale on both — the directory entry alone can't route traffic.`,
-            attemptId,
-          )
-          return
-        }
-        const address = target.endpoint
         if (quality === 'auto') {
           await api.connect(address)
         } else {
           await api.connectWithQuality(address, quality)
         }
-        if (String(attemptRef.current) !== attemptId) return
-        clearTimers()
-        setState({ kind: 'connected', target, requestId, interimViewer: true, permissions, quality })
       } catch (e) {
         fail(target, e instanceof Error ? e.message : "We couldn't reach " + target.name + '.', attemptId)
+        return
       }
+      if (String(attemptRef.current) !== attemptId) return
+      // SESSION-02: the command returning only means the process spawned.
+      const ready = await readyPromise
+      if (String(attemptRef.current) !== attemptId || revokedRef.current) return
+      if (!ready) {
+        fail(target, `We couldn't confirm ${target.name} is on screen.`, attemptId)
+        return
+      }
+      clearTimers()
+      inFlightRef.current = true
+      setState({ kind: 'connected', target, requestId, interimViewer: true, permissions, quality })
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [connectTimeoutMs],
   )
 
+  const launchRef = useRef(launchViewer)
+  launchRef.current = launchViewer
+
+  // Viewer exit, readiness, and the native reconnect schedule.
+  useEffect(() => {
+    const unlistens: Array<() => void> = []
+    const track = (p: Promise<() => void>) => {
+      void p.then((fn) => unlistens.push(fn))
+    }
+
+    const scheduleUiReconnect = (prev: Extract<ConnectionState, { kind: 'connected' }>, index: number) => {
+      const delay = delaysRef.current[index]
+      const attemptId = String(attemptRef.current)
+      if (delay === undefined) {
+        inFlightRef.current = false
+        setState({
+          kind: 'failed',
+          target: prev.target,
+          message: 'The connection dropped and did not recover.',
+        })
+        return
+      }
+      setState({
+        kind: 'reconnecting',
+        target: prev.target,
+        attemptId,
+        requestId: prev.requestId,
+        attempt: index + 1,
+        permissions: prev.permissions,
+        quality: prev.quality,
+      })
+      window.setTimeout(() => {
+        if (revokedRef.current || ignoreExit.current) return
+        if (String(attemptRef.current) !== attemptId) return
+        const endpoint = prev.target.endpoint
+        if (!endpoint) {
+          setState({ kind: 'failed', target: prev.target, message: `We couldn't reach ${prev.target.name}.` })
+          return
+        }
+        void (async () => {
+          const readyPromise = waitForReady(connectTimeoutMs)
+          try {
+            if (prev.quality === 'auto') await api.connect(endpoint)
+            else await api.connectWithQuality(endpoint, prev.quality)
+          } catch {
+            scheduleUiReconnect(prev, index + 1)
+            return
+          }
+          const ready = await readyPromise
+          if (revokedRef.current || String(attemptRef.current) !== attemptId) return
+          if (!ready) {
+            scheduleUiReconnect(prev, index + 1)
+            return
+          }
+          setState({
+            kind: 'connected',
+            target: prev.target,
+            requestId: prev.requestId,
+            interimViewer: true,
+            permissions: prev.permissions,
+            quality: prev.quality,
+          })
+        })()
+      }, delay)
+    }
+
+    track(
+      onEvent('stream-exited', (success) => {
+        if (ignoreExit.current) return
+        const prev = stateRef.current
+        // Preview path: a failed exit after Connected uses the same 1/2/4 s
+        // schedule the native watcher uses. A clean exit is the viewer closing.
+        if (prev.kind === 'connected' && success === false) {
+          scheduleUiReconnect(prev, 0)
+          return
+        }
+        if (prev.kind === 'connecting') {
+          fail(prev.target, `We couldn't confirm ${prev.target.name} is on screen.`, prev.attemptId)
+          return
+        }
+        if (prev.kind === 'connected' || prev.kind === 'reconnecting') {
+          inFlightRef.current = false
+          setState({ kind: 'idle' })
+        }
+      }),
+    )
+    track(
+      onEvent('stream-reconnecting', (payload) => {
+        if (ignoreExit.current || revokedRef.current) return
+        const prev = stateRef.current
+        if (prev.kind !== 'connected' && prev.kind !== 'reconnecting' && prev.kind !== 'connecting') return
+        const attempt = typeof payload === 'object' && payload && 'attempt' in payload ? Number(payload.attempt) : 1
+        setState({
+          kind: 'reconnecting',
+          target: prev.target,
+          attemptId: 'attemptId' in prev ? prev.attemptId : String(attemptRef.current),
+          requestId: 'requestId' in prev ? prev.requestId : null,
+          attempt,
+          permissions: 'permissions' in prev ? prev.permissions : { control: true, files: true, clipboard: true, audio: true },
+          quality: 'quality' in prev ? prev.quality : 'auto',
+        })
+      }),
+    )
+    track(
+      onEvent('stream-ready', () => {
+        // The initial launch waits on this event itself and keeps the granted
+        // permissions. This handler covers a native reconnect, where the UI is
+        // already in `reconnecting` and must not call connect() again.
+        const prev = stateRef.current
+        if (prev.kind !== 'reconnecting' || revokedRef.current) return
+        setState({
+          kind: 'connected',
+          target: prev.target,
+          requestId: prev.requestId,
+          interimViewer: true,
+          permissions: prev.permissions,
+          quality: prev.quality,
+        })
+      }),
+    )
+    track(
+      onEvent('stream-reconnect-failed', () => {
+        const prev = stateRef.current
+        if (prev.kind !== 'connected' && prev.kind !== 'reconnecting' && prev.kind !== 'connecting') return
+        inFlightRef.current = false
+        setState({
+          kind: 'failed',
+          target: prev.target,
+          message: prev.kind === 'connecting'
+            ? `We couldn't confirm ${prev.target.name} is on screen.`
+            : 'The connection dropped and did not recover.',
+        })
+      }),
+    )
+    track(
+      onEvent('stream-revoked', () => {
+        revokedRef.current = true
+        const prev = stateRef.current
+        if (prev.kind !== 'connected' && prev.kind !== 'reconnecting' && prev.kind !== 'connecting') return
+        inFlightRef.current = false
+        setState({ kind: 'failed', target: prev.target, message: 'The host ended this session.' })
+      }),
+    )
+
+    return () => {
+      unlistens.forEach((fn) => fn())
+      clearTimers()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connectTimeoutMs])
+
+  // SESSION-08: while retrying, an ended grant stops the next attempt.
+  useEffect(() => {
+    if (state.kind !== 'reconnecting' || !state.requestId) return
+    const requestId = state.requestId
+    const target = state.target
+    let cancelled = false
+    const timer = setInterval(() => {
+      void api
+        .getRequestStatus(requestId)
+        .then((status) => {
+          if (cancelled || status.state === 'accepted' || status.state === 'pending') return
+          revokedRef.current = true
+          void api.markSessionRevoked().catch(() => {})
+          inFlightRef.current = false
+          setState({ kind: 'failed', target, message: 'The host ended this session.' })
+        })
+        .catch(() => {})
+    }, Math.min(approvalPollMs, 500))
+    return () => {
+      cancelled = true
+      clearInterval(timer)
+    }
+  }, [state, approvalPollMs])
+
   const start = useCallback(
     async (target: ConnectionTarget) => {
-      // SESSION-03: one attempt at a time; repeated clicks are no-ops. The
-      // guard is a synchronous ref — React state is stale between fast clicks.
       if (inFlightRef.current) return
       inFlightRef.current = true
+      revokedRef.current = false
       const attemptId = String(++attemptRef.current)
       clearTimers()
       setState({ kind: 'authorizing', target, attemptId })
@@ -149,91 +350,92 @@ export function useConnection(options: ConnectionOptions = {}) {
         fail(target, e instanceof Error ? e.message : "We couldn't reach " + target.name + '.', attemptId)
         return
       }
-      if (String(attemptRef.current) !== attemptId) return // superseded/cancelled
+      if (String(attemptRef.current) !== attemptId) return
 
       if (request.state === 'accepted') {
-        // Trusted + unattended: straight to connecting (J2).
-        void launchViewer(target, request, attemptId)
+        await launchRef.current(target, request, attemptId)
         return
       }
 
-      // Attended: poll until the host decides or the deadline passes.
       setState({ kind: 'awaitingApproval', target, attemptId, requestId: request.id })
       const requestId = request.id
-      pollTimer.current = setInterval(async () => {
-        if (String(attemptRef.current) !== attemptId) return
-        try {
-          const status = await api.getRequestStatus(requestId)
+      pollTimer.current = setInterval(() => {
+        void (async () => {
           if (String(attemptRef.current) !== attemptId) return
-          if (status.state === 'accepted') {
-            clearTimers()
-            void launchViewer(target, status, attemptId)
-          } else if (status.state === 'rejected') {
-            fail(target, 'The connection request was declined.', attemptId)
-          } else if (status.state === 'expired') {
-            fail(target, 'The request expired.', attemptId)
-          } else if (status.state === 'cancelled') {
-            setState({ kind: 'cancelled' })
+          try {
+            const status = await api.getRequestStatus(requestId)
+            if (String(attemptRef.current) !== attemptId) return
+            if (status.state === 'accepted') {
+              clearTimers()
+              void launchRef.current(target, status, attemptId)
+            } else if (status.state === 'rejected') {
+              fail(target, 'The connection request was declined.', attemptId)
+            } else if (status.state === 'expired') {
+              fail(target, 'The request expired.', attemptId)
+            } else if (status.state === 'cancelled') {
+              inFlightRef.current = false
+              setState({ kind: 'cancelled' })
+            }
+          } catch {
+            /* transient poll failure: keep waiting until the deadline */
           }
-        } catch {
-          /* transient poll failure: keep waiting until the deadline */
-        }
+        })()
       }, approvalPollMs)
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [state.kind, approvalPollMs, launchViewer],
+    [approvalPollMs],
   )
 
   const cancel = useCallback(async () => {
-    attemptRef.current++ // reject late events from the cancelled attempt
+    attemptRef.current++
     inFlightRef.current = false
     clearTimers()
-    const current = state
+    const current = stateRef.current
     setState({ kind: 'cancelled' })
-    // SESSION-05: native/backend cancellation runs; pending approvals die.
-    if (current.kind === 'awaitingApproval' || current.kind === 'connecting') {
-      if (current.requestId) await api.cancelConnectionRequest(current.requestId).catch(() => {})
+    const endpoint = 'target' in current ? current.target.endpoint : undefined
+    if (endpoint) await api.clearSessionGrant(endpoint).catch(() => {})
+    if (
+      (current.kind === 'awaitingApproval' || current.kind === 'connecting' || current.kind === 'reconnecting') &&
+      current.requestId
+    ) {
+      await api.cancelConnectionRequest(current.requestId).catch(() => {})
     }
-  }, [state])
+  }, [])
 
   const disconnect = useCallback(async () => {
-    const current = state
-    if (current.kind !== 'connected') return
+    const current = stateRef.current
+    if (current.kind !== 'connected' && current.kind !== 'reconnecting') return
     attemptRef.current++
+    ignoreExit.current = true
     clearTimers()
     setState({ kind: 'disconnecting', target: current.target })
-    // SESSION-09: the actual viewer session ends and the grant is closed.
     await api.disconnect().catch(() => {})
     if (current.requestId) await api.endConnectionRequest(current.requestId).catch(() => {})
+    if (current.target.endpoint) await api.clearSessionGrant(current.target.endpoint).catch(() => {})
     inFlightRef.current = false
+    ignoreExit.current = false
     setState({ kind: 'idle' })
-  }, [state])
+  }, [])
 
-  /** TOOLBAR-03: the interim external viewer cannot switch quality live, so
-   * changing quality is a controlled restart: the viewer closes, relaunches
-   * with the new policy, and the visible quality changes only after the
-   * relaunch actually succeeds. The grant (request) stays open. */
-  const changeQuality = useCallback(
-    async (quality: QualityPreset) => {
-      const current = state
-      if (current.kind !== 'connected' || current.quality === quality) return
-      const attemptId = String(++attemptRef.current)
-      clearTimers()
-      await api.disconnect().catch(() => {})
-      const target: ConnectionTarget = { ...current.target, quality }
-      setState({ kind: 'connecting', target, attemptId, requestId: current.requestId })
-      await launchViewer(
-        target,
-        current.requestId ? { id: current.requestId, permissions: current.permissions } : null,
-        attemptId,
-      )
-    },
-    [state, launchViewer],
-  )
+  const changeQuality = useCallback(async (quality: QualityPreset) => {
+    const current = stateRef.current
+    if (current.kind !== 'connected' || current.quality === quality) return
+    const attemptId = String(++attemptRef.current)
+    ignoreExit.current = true
+    clearTimers()
+    await api.disconnect().catch(() => {})
+    ignoreExit.current = false
+    const target: ConnectionTarget = { ...current.target, quality }
+    await launchRef.current(
+      target,
+      current.requestId ? { id: current.requestId, permissions: current.permissions } : null,
+      attemptId,
+    )
+  }, [])
 
   const dismiss = useCallback(() => {
     attemptRef.current++
     inFlightRef.current = false
+    revokedRef.current = false
     clearTimers()
     setState({ kind: 'idle' })
   }, [])

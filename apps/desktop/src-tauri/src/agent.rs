@@ -108,31 +108,54 @@ impl IntoResponse for Denied {
     }
 }
 
-/// After a valid signature: if the request carries a session grant token it
-/// is enforced — a view-only session cannot pull files or run commands no
-/// matter what its client claims. No header = legacy access-code semantics.
+fn header_value<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
+    headers
+        .get(name)
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+}
+
+fn sensitive_capability(capability: &str) -> bool {
+    matches!(capability, "files" | "control" | "clipboard" | "audio")
+}
+
+/// After a valid signature, enforce the host's grant.
+///
+/// A presented token is authorized only for the controller device the host
+/// accepted, and only for the capabilities that device was given. While any
+/// account grant is active, file/terminal/clipboard/audio requests that omit
+/// the grant are refused — the shared access code alone is not a bypass
+/// (APPROVAL-05/06/07). With no grant store (local-mode unit tests) or with
+/// an empty store, the access code keeps its existing local-mode meaning.
 fn grant_allows(ctx: &AgentCtx, headers: &HeaderMap, capability: &str) -> Result<(), Denied> {
-    let Some(token) = headers.get(crate::grants::GRANT_HEADER).and_then(|v| v.to_str().ok()) else {
+    let Some(grants) = &ctx.grants else {
         return Ok(());
     };
-    let Some(grants) = &ctx.grants else {
-        return Ok(()); // unit-test context without a grant store
-    };
-    let Some(perms) = grants.permissions(token) else {
-        return Err(Denied::Forbidden);
-    };
-    let allowed = match capability {
-        "control" => perms.control,
-        "files" => perms.files,
-        "clipboard" => perms.clipboard,
-        "audio" => perms.audio, // no agent audio endpoint yet; enforced for completeness
-        _ => true,              // metrics/cert: any valid grant may observe
-    };
-    if allowed {
-        Ok(())
-    } else {
-        Err(Denied::Forbidden)
+    let token = header_value(headers, crate::grants::GRANT_HEADER);
+    let controller = header_value(headers, crate::grants::CONTROLLER_HEADER);
+
+    if let Some(token) = token {
+        let Some(controller) = controller else {
+            return Err(Denied::Forbidden);
+        };
+        let Some(perms) = grants.authorize(token, controller) else {
+            return Err(Denied::Forbidden);
+        };
+        let allowed = match capability {
+            "control" => perms.control,
+            "files" => perms.files,
+            "clipboard" => perms.clipboard,
+            "audio" => perms.audio,
+            _ => true, // metrics/cert: any valid grant may observe
+        };
+        return if allowed { Ok(()) } else { Err(Denied::Forbidden) };
     }
+
+    if sensitive_capability(capability) && grants.has_active() {
+        return Err(Denied::Forbidden);
+    }
+    Ok(())
 }
 
 /// Verifies the signature on a request. `body` must be the exact bytes the
@@ -553,6 +576,9 @@ mod tests {
             let req = signed(CODE, "GET", uri, b"");
             let (mut parts, body) = req.into_parts();
             parts.headers.insert(crate::grants::GRANT_HEADER, token.parse().unwrap());
+            parts
+                .headers
+                .insert(crate::grants::CONTROLLER_HEADER, "dev-helper".parse().unwrap());
             Request::from_parts(parts, body)
         };
 
@@ -594,6 +620,117 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    /// APPROVAL-07: the request id is bound to the controller that was accepted.
+    /// APPROVAL-06: while a grant is active, omitting it does not fall back to
+    /// the access code for files, and a denied download returns no file bytes.
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn grant_identity_and_denied_capabilities_carry_no_data() {
+        let _env = crate::state::testenv::lock();
+        let dir = std::env::temp_dir().join("nodedesk-grant-deny");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::env::set_var("NODEDESK_INCOMING_DIR", dir.to_string_lossy().to_string());
+        let secret = dir.join("secret.txt");
+        std::fs::write(&secret, b"TOP-SECRET-BYTES").unwrap();
+        let path = secret.to_string_lossy().replace('\\', "/");
+
+        let store = std::sync::Arc::new(crate::grants::GrantStore::new());
+        store.issue(
+            "req-viewonly",
+            "dev-helper",
+            crate::grants::Permissions {
+                control: false,
+                files: false,
+                clipboard: false,
+                audio: false,
+            },
+        );
+        let ctx = Arc::new(AgentCtx::with_identity(CODE.into(), None, Some(store.clone())));
+
+        let signed_with = |method: &str, uri: &str, body: &[u8], token: Option<&str>, controller: Option<&str>| {
+            let req = signed(CODE, method, uri, body);
+            let (mut parts, body) = req.into_parts();
+            if let Some(token) = token {
+                parts.headers.insert(crate::grants::GRANT_HEADER, token.parse().unwrap());
+            }
+            if let Some(controller) = controller {
+                parts
+                    .headers
+                    .insert(crate::grants::CONTROLLER_HEADER, controller.parse().unwrap());
+            }
+            Request::from_parts(parts, body)
+        };
+
+        // Wrong controller cannot reuse the request id, even for metrics.
+        let resp = router(ctx.clone())
+            .oneshot(signed_with("GET", "/metrics", b"", Some("req-viewonly"), Some("dev-other")))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+        // Access-code only, while a grant is active, cannot read files.
+        let download = crate::client::path_with_query("/files/download", &[("path", path.clone())]);
+        let resp = router(ctx.clone())
+            .oneshot(signed_with("GET", &download, b"", None, None))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        let bytes = axum::body::to_bytes(resp.into_body(), 1_000_000).await.unwrap();
+        assert!(
+            !bytes.windows(b"TOP-SECRET-BYTES".len()).any(|w| w == b"TOP-SECRET-BYTES"),
+            "a denied download must not contain the file"
+        );
+
+        // The accepted controller with files off also gets no bytes.
+        let resp = router(ctx.clone())
+            .oneshot(signed_with(
+                "GET",
+                &download,
+                b"",
+                Some("req-viewonly"),
+                Some("dev-helper"),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        let bytes = axum::body::to_bytes(resp.into_body(), 1_000_000).await.unwrap();
+        assert!(!bytes.windows(b"TOP-SECRET-BYTES".len()).any(|w| w == b"TOP-SECRET-BYTES"));
+
+        // View-only cannot run a terminal command, and the command does not run.
+        let resp = router(ctx.clone())
+            .oneshot(signed_with(
+                "POST",
+                "/terminal",
+                br#"{"command":"echo nodedesk-should-not-run"}"#,
+                Some("req-viewonly"),
+                Some("dev-helper"),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        let bytes = axum::body::to_bytes(resp.into_body(), 1_000_000).await.unwrap();
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(!text.contains("nodedesk-should-not-run"));
+
+        // An expired grant is the same as no grant.
+        store.expire_now("req-viewonly");
+        let resp = router(ctx)
+            .oneshot(signed_with(
+                "GET",
+                "/metrics",
+                b"",
+                Some("req-viewonly"),
+                Some("dev-helper"),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+        std::env::remove_var("NODEDESK_INCOMING_DIR");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[tokio::test]

@@ -109,21 +109,21 @@ function FilesTab({ computer, notify }: { computer: Computer; notify: (m: string
   return (
     <div
       className={`rounded-2xl border p-5 transition-colors ${
-        dragOver ? 'border-emerald-400 bg-emerald-500/5' : 'border-zinc-800 bg-zinc-900/40'
+        dragOver ? 'border-nd-accent bg-nd-accent/10' : 'border-nd-divider bg-nd-surface'
       }`}
     >
       <div className="flex items-center justify-between">
         <h2 className="flex items-center gap-2 font-semibold">
-          <FolderSync className="h-4 w-4 text-emerald-400" /> Files on {computer.name}
+          <FolderSync className="h-4 w-4 text-nd-ok" /> Files on {computer.name}
         </h2>
-        <button onClick={() => load(path)} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100">
+        <button onClick={() => load(path)} className="rounded-lg p-2 text-nd-dim hover:bg-nd-surface hover:text-nd-text">
           <RefreshCcw className="h-4 w-4" />
         </button>
       </div>
 
-      <div className="mt-3 flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 font-mono text-xs text-zinc-400">
+      <div className="mt-3 flex items-center gap-2 rounded-lg border border-nd-divider bg-nd-bg px-3 py-2 font-mono text-xs text-nd-dim">
         {path && (
-          <button onClick={up} className="text-emerald-400 hover:text-emerald-300">
+          <button onClick={up} className="text-nd-ok hover:text-nd-ok">
             <ArrowUp className="h-3.5 w-3.5" />
           </button>
         )}
@@ -132,24 +132,24 @@ function FilesTab({ computer, notify }: { computer: Computer; notify: (m: string
 
       <div className="mt-3 max-h-64 space-y-1 overflow-y-auto">
         {loading && (
-          <p className="flex items-center gap-2 py-3 text-sm text-zinc-500">
+          <p className="flex items-center gap-2 py-3 text-sm text-nd-dim">
             <Loader2 className="h-4 w-4 animate-spin" /> Loading…
           </p>
         )}
         {!loading &&
           entries.map((e) => (
-            <div key={e.name} className="flex items-center justify-between rounded-lg px-3 py-2 hover:bg-zinc-800/60">
+            <div key={e.name} className="flex items-center justify-between rounded-lg px-3 py-2 hover:bg-nd-surface">
               <button
                 onClick={() => e.isDir && enter(e.name)}
-                className={`flex items-center gap-2.5 text-sm ${e.isDir ? 'text-zinc-100' : 'text-zinc-400'}`}
+                className={`flex items-center gap-2.5 text-sm ${e.isDir ? 'text-nd-text' : 'text-nd-dim'}`}
               >
-                {e.isDir ? <Folder className="h-4 w-4 text-emerald-400" /> : <File className="h-4 w-4" />}
+                {e.isDir ? <Folder className="h-4 w-4 text-nd-ok" /> : <File className="h-4 w-4" />}
                 {e.name}
               </button>
               <span className="flex items-center gap-3">
-                {!e.isDir && <span className="text-xs text-zinc-600">{fmtSize(e.size)}</span>}
+                {!e.isDir && <span className="text-xs text-nd-dim">{fmtSize(e.size)}</span>}
                 {!e.isDir && (
-                  <button onClick={() => download(e.name)} title="Download" className="text-zinc-500 hover:text-emerald-400">
+                  <button onClick={() => download(e.name)} title="Download" className="text-nd-dim hover:text-nd-ok">
                     <Download className="h-4 w-4" />
                   </button>
                 )}
@@ -159,29 +159,29 @@ function FilesTab({ computer, notify }: { computer: Computer; notify: (m: string
       </div>
 
       {transfer && (
-        <div className="mt-4 rounded-xl border border-zinc-800 bg-zinc-950 p-3">
+        <div className="mt-4 rounded-xl border border-nd-divider bg-nd-bg p-3">
           <div className="flex items-center justify-between text-xs">
-            <span className="text-zinc-300">
+            <span className="text-nd-text">
               {transfer.direction === 'up' ? 'Sending' : 'Receiving'} {transfer.file}
             </span>
-            <button onClick={() => transfer && void api.cancelTransfer(transfer.transferId)} className="text-zinc-500 hover:text-red-400">
+            <button onClick={() => transfer && void api.cancelTransfer(transfer.transferId)} className="text-nd-dim hover:text-nd-danger">
               <X className="h-3.5 w-3.5" />
             </button>
           </div>
-          <div className="mt-2 h-1.5 rounded-full bg-zinc-800">
+          <div className="mt-2 h-1.5 rounded-full bg-nd-surface">
             <div
-              className="h-1.5 rounded-full bg-emerald-500 transition-all"
+              className="h-1.5 rounded-full bg-nd-accent transition-all"
               style={{ width: `${transfer.totalBytes ? Math.min(100, (transfer.doneBytes / transfer.totalBytes) * 100) : 0}%` }}
             />
           </div>
-          <p className="mt-1 text-[11px] text-zinc-500">
+          <p className="mt-1 text-[11px] text-nd-dim">
             {fmtSize(transfer.doneBytes)} / {fmtSize(transfer.totalBytes)}
             {transfer.state === 'completed' && ' — done'}
           </p>
         </div>
       )}
 
-      <p className="mt-4 flex items-center gap-2 border-t border-zinc-800 pt-4 text-[11px] text-zinc-600">
+      <p className="mt-4 flex items-center gap-2 border-t border-nd-divider pt-4 text-[11px] text-nd-dim">
         <UploadCloud className="h-3.5 w-3.5" />
         Drop files anywhere on this panel to send them. Interrupted transfers resume automatically.
       </p>
@@ -219,27 +219,27 @@ function TerminalTab({ computer, notify }: { computer: Computer; notify: (m: str
   }, [lines])
 
   return (
-    <div className="overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-950">
-      <div className="border-b border-zinc-800 px-4 py-2.5 text-xs text-zinc-500">
+    <div className="overflow-hidden rounded-2xl border border-nd-divider bg-nd-bg">
+      <div className="border-b border-nd-divider px-4 py-2.5 text-xs text-nd-dim">
         Secure shell — {computer.name} (requires its access code)
       </div>
       <div className="h-72 overflow-y-auto p-4 font-mono text-sm leading-6">
         {lines.map((l, i) => (
           <div key={i}>
             <p>
-              <span className="text-emerald-400">{l.prompt}&gt;</span> {l.cmd}
+              <span className="text-nd-ok">{l.prompt}&gt;</span> {l.cmd}
             </p>
-            {l.out && <pre className="whitespace-pre-wrap text-zinc-400">{l.out}</pre>}
+            {l.out && <pre className="whitespace-pre-wrap text-nd-dim">{l.out}</pre>}
           </div>
         ))}
         <div className="flex items-center gap-2">
-          <span className="text-emerald-400">{cwd || computer.name}&gt;</span>
+          <span className="text-nd-ok">{cwd || computer.name}&gt;</span>
           <input
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && !busy && void run()}
             disabled={busy}
-            className="flex-1 bg-transparent text-zinc-100 outline-none"
+            className="flex-1 bg-transparent text-nd-text outline-none"
             placeholder={busy ? 'running…' : 'type a command, Enter to run'}
             autoFocus
           />
@@ -313,17 +313,17 @@ export default function DeviceDetail({ computer, onBack }: { computer: Computer;
 
   return (
     <div className="mx-auto min-h-screen max-w-3xl px-5 py-6">
-      <button onClick={onBack} className="flex items-center gap-1.5 text-sm text-zinc-400 hover:text-zinc-100">
+      <button onClick={onBack} className="flex items-center gap-1.5 text-sm text-nd-dim hover:text-nd-text">
         <ArrowLeft className="h-4 w-4" /> My Computers
       </button>
 
       <div className="mt-4 flex items-center justify-between">
         <div>
           <h1 className="flex items-center gap-2.5 text-xl font-bold">
-            <span className={`h-2.5 w-2.5 rounded-full ${computer.online ? 'bg-emerald-400' : 'bg-zinc-600'}`} />
+            <span className={`h-2.5 w-2.5 rounded-full ${computer.online ? 'bg-nd-ok' : 'bg-nd-dim'}`} />
             {computer.name}
           </h1>
-          <p className="mt-1 text-xs text-zinc-500">
+          <p className="mt-1 text-xs text-nd-dim">
             {computer.specs} · {computer.address}
           </p>
         </div>
@@ -340,7 +340,7 @@ export default function DeviceDetail({ computer, onBack }: { computer: Computer;
               key={b.action}
               title={b.label}
               onClick={() => void power(b.action)}
-              className="rounded-lg border border-zinc-800 p-2.5 text-zinc-400 transition-colors hover:border-zinc-600 hover:text-zinc-100"
+              className="rounded-lg border border-nd-divider p-2.5 text-nd-dim transition-colors hover:border-nd-text hover:text-nd-text"
             >
               <b.icon className="h-4 w-4" />
             </button>
@@ -348,7 +348,7 @@ export default function DeviceDetail({ computer, onBack }: { computer: Computer;
           <button
             title="Forget this computer"
             onClick={() => void forget()}
-            className="rounded-lg border border-zinc-800 p-2.5 text-zinc-400 transition-colors hover:border-red-500/50 hover:text-red-300"
+            className="rounded-lg border border-nd-divider p-2.5 text-nd-dim transition-colors hover:border-nd-danger hover:text-nd-danger"
           >
             <Trash2 className="h-4 w-4" />
           </button>
@@ -359,21 +359,21 @@ export default function DeviceDetail({ computer, onBack }: { computer: Computer;
         <div
           className={`mt-4 rounded-xl border px-4 py-3 text-sm ${
             message.isError
-              ? 'border-red-500/30 bg-red-500/10 text-red-300'
-              : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
+              ? 'border-nd-danger bg-nd-danger/10 text-nd-danger'
+              : 'border-nd-ok bg-nd-ok/10 text-nd-ok'
           }`}
         >
           {message.text}
         </div>
       )}
 
-      <nav className="mt-5 flex gap-1 rounded-xl border border-zinc-800 bg-zinc-900/50 p-1">
+      <nav className="mt-5 flex gap-1 rounded-xl border border-nd-divider bg-nd-surface p-1">
         {tabs.map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
             className={`flex-1 rounded-lg py-2 text-sm font-medium transition-colors ${
-              tab === t ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-500 hover:text-zinc-300'
+              tab === t ? 'bg-nd-surface text-nd-text' : 'text-nd-dim hover:text-nd-text'
             }`}
           >
             {t}
@@ -383,17 +383,17 @@ export default function DeviceDetail({ computer, onBack }: { computer: Computer;
 
       <div className="mt-5">
         {tab === 'Desktop' && (
-          <div className="rounded-2xl border border-zinc-800 bg-zinc-900/40 p-8 text-center">
-            <MonitorPlay className="mx-auto h-10 w-10 text-emerald-400" />
+          <div className="rounded-2xl border border-nd-divider bg-nd-surface p-8 text-center">
+            <MonitorPlay className="mx-auto h-10 w-10 text-nd-ok" />
             <h2 className="mt-4 font-semibold">Remote desktop</h2>
-            <p className="mx-auto mt-2 max-w-sm text-sm text-zinc-400">
+            <p className="mx-auto mt-2 max-w-sm text-sm text-nd-dim">
               Hardware-accelerated session with synced clipboard. Quality is automatic; tune it in Settings →
               Advanced.
             </p>
             {streaming ? (
               <button
                 onClick={() => void disconnect()}
-                className="mt-6 inline-flex items-center gap-2 rounded-xl border border-red-500/40 px-8 py-3 text-sm font-bold tracking-widest text-red-300 hover:bg-red-500/10"
+                className="mt-6 inline-flex items-center gap-2 rounded-xl border border-nd-danger px-8 py-3 text-sm font-bold tracking-widest text-nd-danger hover:bg-nd-danger/10"
               >
                 <Square className="h-3.5 w-3.5" /> DISCONNECT
               </button>
@@ -401,7 +401,7 @@ export default function DeviceDetail({ computer, onBack }: { computer: Computer;
               <button
                 onClick={() => void connect()}
                 disabled={busy || !computer.online}
-                className="mt-6 rounded-xl bg-emerald-500 px-8 py-3 text-sm font-bold tracking-widest text-zinc-950 hover:bg-emerald-400 disabled:opacity-40"
+                className="mt-6 rounded-xl bg-nd-accent px-8 py-3 text-sm font-bold tracking-widest text-nd-on-accent hover:brightness-110 disabled:opacity-40"
               >
                 {busy ? 'STARTING…' : 'CONNECT'}
               </button>
@@ -415,28 +415,28 @@ export default function DeviceDetail({ computer, onBack }: { computer: Computer;
 
         {tab === 'System' && (
           <div className="space-y-4">
-            <div className="rounded-2xl border border-zinc-800 bg-zinc-900/40 p-6">
+            <div className="rounded-2xl border border-nd-divider bg-nd-surface p-6">
               <h2 className="flex items-center gap-2 font-semibold">
-                <BrainCircuit className="h-4 w-4 text-emerald-400" /> AI services
+                <BrainCircuit className="h-4 w-4 text-nd-ok" /> AI services
               </h2>
               <div className="mt-4 space-y-2">
                 {runningServices.length === 0 && (
-                  <p className="text-sm text-zinc-500">No known services running on this computer right now.</p>
+                  <p className="text-sm text-nd-dim">No known services running on this computer right now.</p>
                 )}
                 {runningServices.map((s) => (
                   <div
                     key={s.name}
-                    className="flex items-center justify-between rounded-lg border border-zinc-800 bg-zinc-950/60 px-4 py-3"
+                    className="flex items-center justify-between rounded-lg border border-nd-divider bg-nd-bg px-4 py-3"
                   >
                     <span className="flex items-center gap-2.5 text-sm">
-                      <span className="h-2 w-2 rounded-full bg-emerald-400" />
+                      <span className="h-2 w-2 rounded-full bg-nd-ok" />
                       {s.name}
                     </span>
                     <a
                       href={`http://${computer.address}:${s.port}`}
                       target="_blank"
                       rel="noreferrer"
-                      className="text-xs font-semibold tracking-wide text-emerald-400 hover:text-emerald-300"
+                      className="text-xs font-semibold tracking-wide text-nd-ok hover:text-nd-ok"
                     >
                       OPEN
                     </a>
@@ -451,9 +451,9 @@ export default function DeviceDetail({ computer, onBack }: { computer: Computer;
                 ['RAM', computer.ramTotalGb ? `${computer.ramUsedGb} / ${computer.ramTotalGb} GB` : '—'],
                 ['VRAM', computer.vramTotalGb ? `${computer.vramUsedGb} / ${computer.vramTotalGb} GB` : '—'],
               ].map(([k, v]) => (
-                <div key={k} className="rounded-xl border border-zinc-800 bg-zinc-900/40 px-4 py-3">
-                  <p className="text-[11px] uppercase tracking-widest text-zinc-500">{k}</p>
-                  <p className="mt-1 font-mono text-zinc-200">{v}</p>
+                <div key={k} className="rounded-xl border border-nd-divider bg-nd-surface px-4 py-3">
+                  <p className="text-[11px] uppercase tracking-widest text-nd-dim">{k}</p>
+                  <p className="mt-1 font-mono text-nd-text">{v}</p>
                 </div>
               ))}
             </div>

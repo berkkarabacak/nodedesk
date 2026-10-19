@@ -114,6 +114,7 @@ pub struct AgentRequest<'a> {
     body: Vec<u8>,
     timeout: Option<Duration>,
     grant: Option<String>,
+    controller: Option<String>,
 }
 
 impl<'a> AgentRequest<'a> {
@@ -127,6 +128,7 @@ impl<'a> AgentRequest<'a> {
             body: vec![],
             timeout: None,
             grant: None,
+            controller: None,
         }
     }
 
@@ -162,6 +164,13 @@ impl<'a> AgentRequest<'a> {
     /// enforces the grant's permissions on the matching capability.
     pub fn grant(mut self, token: Option<String>) -> Self {
         self.grant = token;
+        self
+    }
+
+    /// Device id of the controller presenting `grant`. The host rejects the
+    /// grant when this does not match the accepted controller.
+    pub fn controller(mut self, device_id: Option<String>) -> Self {
+        self.controller = device_id;
         self
     }
 
@@ -205,6 +214,9 @@ impl<'a> AgentRequest<'a> {
             .header(auth::AUTH_HEADER, signature);
         if let Some(token) = &self.grant {
             request = request.header(crate::grants::GRANT_HEADER, token);
+        }
+        if let Some(device_id) = &self.controller {
+            request = request.header(crate::grants::CONTROLLER_HEADER, device_id);
         }
         if !self.body.is_empty() {
             request = request

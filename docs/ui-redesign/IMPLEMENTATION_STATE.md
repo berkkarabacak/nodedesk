@@ -4,7 +4,16 @@ Product: NodeDesk — free remote desktop, Google sign-in, saved PCs, one-click 
 Specification: `docs/ui-redesign/SPEC.txt` (durable copy of the BDD implementation prompt).
 Design source: `Simple Remote Desktop App UI.zip` → `Simple Remote Desktop App.dc.html`, screens 01–08.
 
-## Current position
+## Current position (2026-10-19)
+
+Issues #6, #8, and #9 are implemented on `cursor/issues-6-8-9-6ccf` as a draft against `ui-redesign`. Nothing here is merged.
+
+- Toolchain on Linux: `cargo clippy --all-targets -- -D warnings` clean, `cargo test` 79 passed, desktop `npm test` 84 passed, `npm run build` passed, directory `npm test` 32 passed.
+- #8 code: directory listens on `127.0.0.1:8081`, Docker uses the host network with no published ports, client id comes from the environment or a mode-600 file, and no client secret is in git. Creating the Google client, the Squarespace A record, and deploying to `2.28.215.22` are still operator steps (`docs/ui-redesign/GOOGLE_SETUP.md`). `nodedesk.berkkarabacak.com` did not resolve in this environment.
+- #9 code: grants check controller identity and expiry, view-only rewrites the full Sunshine input config and restarts it, revoke/sign-out/session-end calls unpair-all, stream readiness is the upstream video-stream line, and reconnect waits 1s, 2s, then 4s. Covered by unit tests. A two-machine hardware run was not done.
+- #6 code: DeviceDetail, Diagnostics, Onboarding, and Dashboard use the design tokens; This Computer can approve a 4-digit pairing code; a completed download has Open folder; sending a folder is still refused. Browser preview checked onboarding, pairing, a 1.8 KB download, and diagnostics.
+
+## Earlier position
 
 - Current milestone: **DEMO-READY** — all slices + hardening pushed to PR #11 (branch `ui-redesign`); demo kit shipped; final regression green.
 

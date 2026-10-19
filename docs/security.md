@@ -64,6 +64,20 @@ for out-of-band verification. Forgetting a host also drops its pinned
 certificate. Payloads (files, clipboard, terminal output) are therefore
 confidential in transit; HMAC continues to authenticate every request on top.
 
+**Session grants.** An accepted account session records a grant in memory
+(request id, controller device id, permissions, expiry). It is never written
+to settings.json. File, terminal, and power requests must present that grant
+and the controller's device id. A view-only grant, a forged token, a mismatched
+device, or an expired grant is rejected and the response body does not contain
+the file or command output. While any grant is active, the access code alone
+cannot call those endpoints. Revoke, sign-out, and session end also unpair
+every Sunshine client (`POST /api/clients/unpair-all`) so an old Moonlight
+pairing cannot keep sending input. View-only additionally rewrites Sunshine's
+full config with `mouse`, `keyboard`, and `controller` off and restarts the
+host service; the previous values are restored when the session ends. That
+config write is a full round-trip, not a partial file. It is not a claim that
+a live stream was checked on hardware.
+
 ## Mechanisms
 
 | Area | Approach | Status |
@@ -73,6 +87,7 @@ confidential in transit; HMAC continues to authenticate every request on top.
 | Agent transport | TLS with pinned per-device certificates; signed, replay-protected, throttled | Implemented |
 | Credential storage | OS secure storage — for this host's code and every remote host's code. Windows Credential Manager, macOS Keychain, and Secret Service (GNOME Keyring / KWallet) on Linux | Implemented |
 | Path confinement | Network-supplied paths confined to shared folders | Implemented |
+| Session grants | Agent enforces the accepted permissions and controller identity; policy changes unpair Sunshine clients | Implemented; not hardware-verified |
 | Upstream downloads | Origin-verified against the expected GitHub repository before an installer is written or run | Implemented |
 | Diagnostic exports | Contain no credentials, keys, tokens or clipboard contents | Implemented |
 | Internet exposure | LAN-first. Tailscale (optional) for remote access. NodeDesk does **not** silently expose the host to the public internet | Implemented |

@@ -60,7 +60,10 @@ describe('SETTINGS-03: default quality applies to new sessions only', () => {
         endpoints: ['192.168.1.20'],
       },
     ])
-    const withQuality = vi.spyOn(api, 'connectWithQuality').mockResolvedValue()
+    const withQuality = vi.spyOn(api, 'connectWithQuality').mockImplementation(async () => {
+      const { __emitMockEvent } = await import('./lib/api')
+      __emitMockEvent('stream-ready', {})
+    })
     vi.spyOn(api, 'createConnectionRequest').mockResolvedValue({
       id: 'req-m8',
       hostDeviceId: 'dev-h',

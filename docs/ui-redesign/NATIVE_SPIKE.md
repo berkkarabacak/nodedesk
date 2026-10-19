@@ -1,14 +1,32 @@
 # Native spike: stream readiness, toolbar, and permission enforcement (M5/M6)
 
-Status: **written from code inspection, not verified on hardware** (no Rust
-toolchain / real hosts in the authoring environment). Commands below must be
-run on a Windows dev machine before any claim is made.
+Status: **native behavior is unit-tested. Hardware acceptance is not done.**
+A green `cargo test` does not mean two Windows machines were used.
 
-## Findings at ff07bf2 + M-series changes
+## What the code does now
 
-1. `connect_computer` spawns external Moonlight; `stream-started` fires on
-   process spawn — explicitly NOT readiness (SESSION-02). No stdout parsing
-   exists for a readiness marker.
+1. `stream-started` fires when the Moonlight process spawns. That is not
+   Connected. `stream-ready` fires only when a log line matches Moonlight-Qt's
+   `Video stream is <width>x<height>x<fps>` (`Session::drSetup`). The UI stays
+   on Connecting until that line, and a process exit before it is a failure
+   (SESSION-02).
+2. After a ready stream, a non-clean exit retries at 1s, 2s, then 4s and then
+   stops. A clean quit does not retry. Revocation sets a flag, kills the
+   viewer, and does not relaunch (SESSION-07/08).
+3. Grants are enforced on the agent. See `grants.rs` and the agent tests:
+   wrong controller, missing grant while one is active, view-only terminal,
+   and a denied download whose body is not the file.
+4. Policy changes call Sunshine `POST /api/clients/unpair-all`. View-only
+   acceptance turns `mouse`, `keyboard`, and `controller` off via a full
+   config round-trip plus restart, and restores them when the session ends.
+   This is not verified against a running Sunshine in CI (the HTTP shape is
+   tested with a local stub).
+
+## Still not claimed
+
+1. `connect_computer` cannot see a real Moonlight window in CI. The readiness
+   marker is the upstream log line; it has not been captured from a hardware
+   session in this change.
 2. `stream_child` was overwritten on a second spawn (leaked process). Fixed
    in M5: `start_stream` kills+reaps a previous child first (SESSION-06).
 3. No exit watcher existed. M5 adds `watch_stream` emitting `stream-exited`

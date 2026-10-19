@@ -1,0 +1,30 @@
+# Directory service for https://nodedesk.berkkarabacak.com
+#
+# The server is 2.28.215.22. nginx on that host listens on 443 and proxies to
+# 127.0.0.1:8081. This file uses the host network so the process really binds
+# 127.0.0.1:8081 on the server. There is no `ports:` entry: nothing is published
+# on a public interface.
+#
+# Do not add Sunshine ports 47984, 47989, 47990, or 48010.
+# Port 8080 is Notepad++ Sync. Leave it alone.
+#
+# Before the first start:
+#   sudo install -d -m 755 /var/lib/nodedesk
+#   sudo install -d -m 755 /etc/nodedesk
+#   sudo install -m 600 /dev/null /etc/nodedesk/google-client-id
+#   # then write ONLY the Desktop OAuth client id into that file (one line).
+#   # No client secret. No .env file.
+
+services:
+  directory:
+    build: .
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      BIND: 127.0.0.1
+      PORT: "8081"
+      DB_PATH: /var/lib/nodedesk/directory.db
+      GOOGLE_CLIENT_ID_FILE: /etc/nodedesk/google-client-id
+    volumes:
+      - /var/lib/nodedesk:/var/lib/nodedesk
+      - /etc/nodedesk:/etc/nodedesk:ro
